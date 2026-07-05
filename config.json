@@ -1,8 +1,10 @@
 {
-  "watchlist": ["SPY", "QQQ", "IWM", "DIA", "GLD", "SLV", "TLT", "XLF", "XLE", "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA", "AMD", "AVGO", "MU", "INTC", "PLTR", "ORCL", "CRM", "UBER", "COIN", "MARA", "HOOD", "AFRM", "PYPL", "SOFI", "BAC", "JPM", "F", "GM", "AAL", "DAL", "SNAP", "PFE", "XOM", "CCL", "RIVN", "NIO", "DKNG", "RBLX", "HIMS", "WBD", "LCID"],
+  "watchlist": ["SPY", "QQQ", "IWM", "DIA", "GLD", "SLV", "TLT", "XLF", "XLE", "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA", "AMD", "AVGO", "MU", "INTC", "PLTR", "ORCL", "CRM", "UBER", "COIN", "MARA", "HOOD", "AFRM", "PYPL", "SOFI", "BAC", "JPM", "F", "GM", "AAL", "DAL", "SNAP", "PFE", "XOM", "CCL", "RIVN", "NIO", "DKNG", "RBLX", "HIMS", "WBD", "LCID", "CAG", "LEVI", "VERA"],
   "automatic_discovery": true,
   "top_market_universe_size": 1000,
   "discovery_limit": 20,
+  "news_discovery_limit": 20,
+  "priority_symbols": ["CAG", "LEVI", "VERA"],
   "discovery_universe": ["SPY", "QQQ", "IWM", "DIA", "GLD", "SLV", "TLT", "XLF", "XLE", "XLK", "XLV", "XLI", "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA", "AMD", "AVGO", "MU", "INTC", "PLTR", "ORCL", "CRM", "ADBE", "NFLX", "QCOM", "AMAT", "ARM", "SMCI", "DELL", "CSCO", "IBM", "NOW", "SHOP", "UBER", "ABNB", "DASH", "COIN", "MARA", "HOOD", "AFRM", "PYPL", "XYZ", "SOFI", "BAC", "JPM", "WFC", "GS", "MS", "V", "MA", "AXP", "F", "GM", "RIVN", "LCID", "NIO", "AAL", "DAL", "UAL", "CCL", "RCL", "LUV", "SNAP", "PINS", "RBLX", "DKNG", "HIMS", "WBD", "DIS", "FOX", "PFE", "MRNA", "LLY", "UNH", "CVS", "ABBV", "XOM", "CVX", "OXY", "SLB", "BA", "CAT", "GE", "RTX", "WMT", "TGT", "COST", "NKE", "SBUX", "MCD", "KO", "PEP", "HD", "LOW", "BABA", "JD", "LI", "XPEV"],
   "account_size": 500,
   "max_risk_per_trade_pct": 8,

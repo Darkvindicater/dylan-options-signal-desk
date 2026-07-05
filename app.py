@@ -53,6 +53,7 @@ with st.sidebar:
         f"Discovery keeps {len(config.get('discovery_universe', []))} core symbols and adds the live top "
         f"{config.get('top_market_universe_size', 0):,} U.S.-listed stocks, then fully analyzes the strongest movers."
     )
+    st.caption("A second news lane adds fresh earnings, FDA, guidance, contract, acquisition, partnership and analyst-action names before ranking.")
     watchlist = st.text_area("Watchlist", ", ".join(config["watchlist"]))
     st.warning("A $500 account should not target fixed daily income. One long option can lose its entire premium.")
 

@@ -53,6 +53,7 @@ class SignalEngine:
         self.config = config
         self.sentiment = SentimentIntensityAnalyzer()
         self._market_cache: dict[str, Any] | None = None
+        self._nasdaq_rows: list[dict[str, Any]] = []
 
     def top_us_symbols(self) -> list[str]:
         """Load the largest active U.S.-listed operating companies from Nasdaq."""
@@ -69,6 +70,7 @@ class SignalEngine:
         response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
         rows = response.json()["data"]["rows"]
+        self._nasdaq_rows = rows
         excluded_name_terms = ("warrant", "rights", " units", "acquisition", "preferred")
         eligible = []
         for row in rows:
@@ -88,6 +90,46 @@ class SignalEngine:
             eligible.append((market_cap, symbol))
         eligible.sort(reverse=True)
         return [symbol for _, symbol in eligible[:requested]]
+
+    def news_discovery_symbols(self) -> list[str]:
+        """Find catalyst names before price/volume pre-screening can discard them."""
+        if not self._nasdaq_rows:
+            self.top_us_symbols()
+        query = quote_plus(
+            "stock (earnings OR guidance OR FDA OR approval OR contract OR acquisition "
+            "OR partnership OR upgrade OR downgrade OR forecast) when:3d"
+        )
+        feed = feedparser.parse(
+            f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
+        )
+        raw_titles = [str(item.get("title", "")).lower() for item in feed.entries]
+        titles = [re.sub(r"[^a-z0-9 ]+", " ", title) for title in raw_titles]
+        matches: list[str] = []
+        excluded = ("warrant", "rights", " units", "acquisition", "preferred")
+        suffixes = {"inc", "incorporated", "corp", "corporation", "company", "co", "plc", "ltd", "limited", "holdings", "group"}
+        for row in self._nasdaq_rows:
+            symbol = str(row.get("symbol") or "").strip().upper().replace(".", "-")
+            name = str(row.get("name") or "").lower()
+            if any(term in name for term in excluded) or not re.fullmatch(r"[A-Z][A-Z0-9-]{0,5}", symbol):
+                continue
+            try:
+                price = float(str(row.get("lastsale") or "0").replace("$", "").replace(",", ""))
+                volume = int(str(row.get("volume") or "0").replace(",", ""))
+            except ValueError:
+                continue
+            if price < self.config["minimum_stock_price"] or volume < 250_000:
+                continue
+            words = [word for word in re.sub(r"[^a-z0-9 ]+", " ", name).split() if word not in suffixes]
+            company_key = " ".join(words[:2])
+            tagged_symbol = re.compile(
+                rf"(?:\${re.escape(symbol.lower())}\b|(?:nasdaq|nyse|amex)\s*[:\-]?\s*{re.escape(symbol.lower())}\b|\({re.escape(symbol.lower())}\))"
+            )
+            if any(
+                (len(company_key) >= 6 and company_key in title) or tagged_symbol.search(raw)
+                for title, raw in zip(titles, raw_titles)
+            ):
+                matches.append(symbol)
+        return list(dict.fromkeys(matches))[: int(self.config.get("news_discovery_limit", 20))]
 
     @staticmethod
     def _series(frame: pd.DataFrame, name: str) -> pd.Series:
@@ -135,7 +177,12 @@ class SignalEngine:
                     ranked.append((move_5d * 4 + min(volume_ratio, 4) / 4, symbol))
             ranked.sort(reverse=True)
             selected = [symbol for _, symbol in ranked[:limit]]
-            return selected or self.config["watchlist"]
+            try:
+                news_names = self.news_discovery_symbols()
+            except Exception:
+                news_names = []
+            priority = [*self.config.get("priority_symbols", []), *news_names, *selected]
+            return list(dict.fromkeys(priority))
         except Exception:
             return self.config["watchlist"]
 
@@ -536,10 +583,9 @@ class SignalEngine:
         for symbol in symbols:
             try:
                 candidate = self.analyze(symbol.upper().strip())
-                # Never surface a symbol that cannot produce a currently usable
-                # options contract. The next qualifying symbol in the watchlist
-                # automatically takes its place in the final ranking.
-                if candidate and candidate.option is not None:
+                # WATCH names may be surfaced without a contract so catalyst
+                # stocks are visible before the entry and option gates are ready.
+                if candidate and candidate.setup_status != "SKIP":
                     candidates.append(candidate)
             except Exception as exc:
                 errors.append(f"{symbol}: {exc}")
