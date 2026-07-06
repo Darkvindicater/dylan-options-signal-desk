@@ -42,6 +42,7 @@ class Candidate:
     market_context: str
     a_plus_score: int
     reversal_watch: bool
+    extended_watch: bool
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -242,8 +243,14 @@ class SignalEngine:
             "fomc": "Macro catalyst",
             "cpi": "Macro catalyst",
         }
+        false_catalyst_phrases = (
+            "price to earnings", "p/e ratio", "shares trade quietly", "stock price forecast",
+            "forward of", "historical stock price", "technical analysis",
+        )
         for headline in headlines:
             title = headline["title"].lower()
+            if any(phrase in title for phrase in false_catalyst_phrases):
+                continue
             for keyword, label in keywords.items():
                 if keyword in title:
                     return True, f"{label}: {headline['title']}"
@@ -271,6 +278,8 @@ class SignalEngine:
         put_15 = last < box_bottom
         call_5 = float(close5.iloc[-1]) > float(high5.iloc[-21:-1].max())
         put_5 = float(close5.iloc[-1]) < float(low5.iloc[-21:-1].min())
+        failed_breakout_up = float(high5.tail(8).max()) > box_top and float(close5.iloc[-1]) < box_top
+        failed_breakdown_down = float(low5.tail(8).min()) < box_bottom and float(close5.iloc[-1]) > box_bottom
         volume_confirmed = volume_ratio >= 1.2 and float(vol5.iloc[-1]) >= float(vol5.iloc[-21:-1].mean())
         direction = "CALL" if call_15 and call_5 else "PUT" if put_15 and put_5 else "NONE"
         return {
@@ -281,6 +290,8 @@ class SignalEngine:
             "breakout_direction": direction,
             "breakout_confirmed": direction != "NONE",
             "volume_confirmed": volume_confirmed,
+            "failed_breakout_up": failed_breakout_up,
+            "failed_breakdown_down": failed_breakdown_down,
         }
 
     @staticmethod
@@ -471,7 +482,11 @@ class SignalEngine:
     def analyze(self, symbol: str) -> Candidate | None:
         frame = self.market_data(symbol)
         data = self.indicators(frame)
-        if data["price"] < self.config["minimum_stock_price"] or data["avg_volume"] < self.config["minimum_average_volume"]:
+        if (
+            data["price"] < self.config["minimum_stock_price"]
+            or data["avg_volume"] < self.config["minimum_average_volume"]
+            or data["price"] * data["avg_volume"] < self.config.get("minimum_average_dollar_volume", 0)
+        ):
             return None
         company = self.company_check(symbol)
         headlines = self.news(symbol, company["name"])
@@ -482,13 +497,24 @@ class SignalEngine:
         except Exception:
             darvas = {"box_top": data["recent_high"], "box_bottom": data["recent_low"], "last_15m_close": data["price"],
                       "volume_ratio": data["volume_ratio"], "breakout_direction": "NONE",
-                      "breakout_confirmed": False, "volume_confirmed": False}
-        one_day_return = float(self._series(frame, "Close").pct_change().iloc[-1])
-        overextended_up = one_day_return >= .08 or data["return_5d"] >= .15 or data["rsi14"] >= 80
-        overextended_down = one_day_return <= -.08 or data["return_5d"] <= -.15 or data["rsi14"] <= 20
-        reversal_watch = darvas["breakout_direction"] == "NONE" and (overextended_up or overextended_down)
+                      "breakout_confirmed": False, "volume_confirmed": False,
+                      "failed_breakout_up": False, "failed_breakdown_down": False}
+        daily_returns = self._series(frame, "Close").pct_change().dropna()
+        one_day_return = float(daily_returns.iloc[-1])
+        recent_gap_up = float(daily_returns.tail(3).max())
+        recent_gap_down = float(daily_returns.tail(3).min())
+        overextended_up = recent_gap_up >= .08 or data["return_5d"] >= .15 or data["rsi14"] >= 80
+        overextended_down = recent_gap_down <= -.08 or data["return_5d"] <= -.15 or data["rsi14"] <= 20
+        reversal_watch = darvas["breakout_direction"] == "NONE" and (
+            darvas.get("failed_breakout_up", False) or darvas.get("failed_breakdown_down", False)
+        )
+        extended_watch = darvas["breakout_direction"] == "NONE" and not reversal_watch and (
+            overextended_up or overextended_down
+        )
         direction = darvas["breakout_direction"] if darvas["breakout_direction"] != "NONE" else (
-            "PUT" if overextended_up else "CALL" if overextended_down else "CALL" if score > 0 else "PUT"
+            "PUT" if darvas.get("failed_breakout_up", False) else
+            "CALL" if darvas.get("failed_breakdown_down", False) else
+            "CALL" if overextended_up else "PUT" if overextended_down else "CALL" if score > 0 else "PUT"
         )
         confidence = self.confidence(score)
         if confidence < self.config["minimum_confidence"]:
@@ -528,7 +554,7 @@ class SignalEngine:
         story_exists = bool(company["business"]) and (
             company["revenue_growth"] is None or company["revenue_growth"] > 0 or abs(data["return_20d"]) > .03
         )
-        not_late = abs(one_day_return) <= .08 and abs(data["return_5d"]) <= .15 and 20 < data["rsi14"] < 80
+        not_late = max(abs(recent_gap_up), abs(recent_gap_down)) <= .08 and abs(data["return_5d"]) <= .15 and 20 < data["rsi14"] < 80
         option_liquid = option is not None
         risk_ready = darvas["box_top"] > darvas["box_bottom"]
         box_width = (darvas["box_top"] - darvas["box_bottom"]) / max(data["price"], 0.01)
@@ -558,8 +584,11 @@ class SignalEngine:
         )
         if reversal_watch:
             setup_status = "PUT REVERSAL WATCH" if direction == "PUT" else "CALL REVERSAL WATCH"
+        elif extended_watch:
+            setup_status = "EXTENDED CALL WATCH" if direction == "CALL" else "EXTENDED PUT WATCH"
         bullish = direction == "CALL"
-        setup_type = ("Reversal watch - not an approved setup until breakdown/breakout confirmation" if reversal_watch else
+        setup_type = ("Reversal watch - failed level, but not approved until confirmation" if reversal_watch else
+            "Extended continuation watch - wait for a base, hold, or retest; do not chase" if extended_watch else
             "Setup 3 - Failed Story Breakdown PUT" if not bullish else
             "Setup 2 - Leader Continuation CALL" if stage.startswith("Stage 2") and relative_ok else
             "Setup 1 - Early Story Breakout CALL"
@@ -577,6 +606,12 @@ class SignalEngine:
                 f"{data['return_5d']:+.1%} five days), so the app is watching the opposite direction; "
                 "this is observation only until price confirms reversal."
             )
+        elif extended_watch:
+            thesis += (
+                f" The move is extended ({one_day_return:+.1%} one day, {data['return_5d']:+.1%} five days). "
+                f"The largest recent gap was {max(abs(recent_gap_up), abs(recent_gap_down)):.1%}. "
+                "Momentum still points the same way, but entry is blocked until a new base, hold, or retest forms."
+            )
         if bullish:
             box_height = max(darvas["box_top"] - darvas["box_bottom"], data["price"] * .01)
             entry = f"Entry only after a 15m/5m hold or retest above Darvas top ${darvas['box_top']:.2f} with volume."
@@ -590,7 +625,7 @@ class SignalEngine:
         return Candidate(symbol, direction, confidence, data["price"], score, thesis, catalysts, risks,
                          entry, invalidation, target, self.earnings_date(symbol), option, details, headlines,
                          setup_status, checklist, darvas, company, catalyst, setup_type, stage,
-                         market_text, a_plus_score, reversal_watch)
+                         market_text, a_plus_score, reversal_watch, extended_watch)
 
     def scan(self) -> tuple[list[Candidate], list[str]]:
         candidates: list[Candidate] = []
@@ -605,7 +640,8 @@ class SignalEngine:
                     candidates.append(candidate)
             except Exception as exc:
                 errors.append(f"{symbol}: {exc}")
-        status_rank = {"TRADE SETUP": 3, "PUT REVERSAL WATCH": 2, "CALL REVERSAL WATCH": 2, "WATCH": 1, "SKIP": 0}
+        status_rank = {"TRADE SETUP": 4, "PUT REVERSAL WATCH": 3, "CALL REVERSAL WATCH": 3,
+                       "EXTENDED CALL WATCH": 2, "EXTENDED PUT WATCH": 2, "WATCH": 1, "SKIP": 0}
         candidates.sort(key=lambda item: (status_rank[item.setup_status], item.a_plus_score, item.confidence), reverse=True)
         calls = [item for item in candidates if item.direction == "CALL"][: int(self.config.get("max_call_candidates", 3))]
         puts = [item for item in candidates if item.direction == "PUT"][: int(self.config.get("max_put_candidates", 3))]

@@ -30,6 +30,8 @@ class EngineTests(unittest.TestCase):
         self.assertIn("Contract", label)
         found, _ = SignalEngine.catalyst_check([{"title": "Company shares trade quietly"}])
         self.assertFalse(found)
+        found, _ = SignalEngine.catalyst_check([{"title": "Price to earnings forward of Example Inc"}])
+        self.assertFalse(found)
 
     def test_weinstein_stage_two(self):
         prices = pd.Series(range(1, 121), dtype=float)

@@ -13,7 +13,8 @@
   "max_put_candidates": 3,
   "minimum_confidence": 58,
   "minimum_stock_price": 10,
-  "minimum_average_volume": 1000000,
+  "minimum_average_volume": 500000,
+  "minimum_average_dollar_volume": 5000000,
   "option_days_min": 14,
   "option_days_max": 35
   ,"preferred_contract_min": 15
