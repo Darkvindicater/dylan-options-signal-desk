@@ -12,7 +12,7 @@ from engine import SignalEngine
 
 
 ROOT = Path(__file__).parent
-APP_STATE_VERSION = 5
+APP_STATE_VERSION = 6
 
 
 def load_config() -> dict:
@@ -27,7 +27,7 @@ saved_candidates = st.session_state.get("candidates", [])
 candidate_schema_is_current = all(
     hasattr(candidate, field)
     for candidate in saved_candidates
-    for field in ("setup_status", "checklist", "darvas", "company", "catalyst", "setup_type", "a_plus_score")
+    for field in ("setup_status", "checklist", "darvas", "company", "catalyst", "setup_type", "a_plus_score", "reversal_watch")
 )
 if (
     st.session_state.get("app_state_version") != APP_STATE_VERSION
@@ -39,7 +39,8 @@ if (
 
 st.title("Options Signal Desk")
 st.caption("Dylan Playbook V2: Market → theme → story → catalyst → stage → leadership → structure → confirmation → option → risk.")
-st.caption("Symbols without a live, liquid, affordable options contract are skipped and replaced by the next qualifying stock.")
+st.caption("Only TRADE SETUP names have passed the live, liquid, affordable contract gate; WATCH names may appear before a contract qualifies.")
+st.caption("PUT/CALL REVERSAL WATCH means the prior move is stretched; it is not an entry until the underlying confirms a reversal through structure and volume.")
 
 config = load_config()
 with st.sidebar:

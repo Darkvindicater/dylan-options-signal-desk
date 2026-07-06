@@ -41,6 +41,7 @@ class Candidate:
     weinstein_stage: str
     market_context: str
     a_plus_score: int
+    reversal_watch: bool
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -482,7 +483,13 @@ class SignalEngine:
             darvas = {"box_top": data["recent_high"], "box_bottom": data["recent_low"], "last_15m_close": data["price"],
                       "volume_ratio": data["volume_ratio"], "breakout_direction": "NONE",
                       "breakout_confirmed": False, "volume_confirmed": False}
-        direction = darvas["breakout_direction"] if darvas["breakout_direction"] != "NONE" else ("CALL" if score > 0 else "PUT")
+        one_day_return = float(self._series(frame, "Close").pct_change().iloc[-1])
+        overextended_up = one_day_return >= .08 or data["return_5d"] >= .15 or data["rsi14"] >= 80
+        overextended_down = one_day_return <= -.08 or data["return_5d"] <= -.15 or data["rsi14"] <= 20
+        reversal_watch = darvas["breakout_direction"] == "NONE" and (overextended_up or overextended_down)
+        direction = darvas["breakout_direction"] if darvas["breakout_direction"] != "NONE" else (
+            "PUT" if overextended_up else "CALL" if overextended_down else "CALL" if score > 0 else "PUT"
+        )
         confidence = self.confidence(score)
         if confidence < self.config["minimum_confidence"]:
             return None
@@ -521,7 +528,7 @@ class SignalEngine:
         story_exists = bool(company["business"]) and (
             company["revenue_growth"] is None or company["revenue_growth"] > 0 or abs(data["return_20d"]) > .03
         )
-        not_late = abs(float(self._series(frame, "Close").pct_change().iloc[-1])) <= .08 and abs(data["return_5d"]) <= .15
+        not_late = abs(one_day_return) <= .08 and abs(data["return_5d"]) <= .15 and 20 < data["rsi14"] < 80
         option_liquid = option is not None
         risk_ready = darvas["box_top"] > darvas["box_bottom"]
         box_width = (darvas["box_top"] - darvas["box_bottom"]) / max(data["price"], 0.01)
@@ -549,18 +556,27 @@ class SignalEngine:
         setup_status = "TRADE SETUP" if checklist_score >= self.config["minimum_checklist_score"] and required_core and option_liquid else (
             "WATCH" if checklist_score >= 6 else "SKIP"
         )
+        if reversal_watch:
+            setup_status = "PUT REVERSAL WATCH" if direction == "PUT" else "CALL REVERSAL WATCH"
         bullish = direction == "CALL"
-        setup_type = (
+        setup_type = ("Reversal watch - not an approved setup until breakdown/breakout confirmation" if reversal_watch else
             "Setup 3 - Failed Story Breakdown PUT" if not bullish else
             "Setup 2 - Leader Continuation CALL" if stage.startswith("Stage 2") and relative_ok else
             "Setup 1 - Early Story Breakout CALL"
         )
+        score_label = "bullish" if score > 0 else "bearish"
         thesis = (
-            f"{symbol} has a {'bullish' if bullish else 'bearish'} composite score of {score:+.2f}. "
+            f"{symbol} has a {score_label} momentum/news composite score of {score:+.2f}. "
             f"Price is {'above' if data['price'] > data['sma50'] else 'below'} its 50-day average, "
             f"with RSI {data['rsi14']:.1f} and 5-day return {data['return_5d']:.1%}. "
             f"Weinstein classification: {stage}. Market: {market_text}."
         )
+        if reversal_watch:
+            thesis += (
+                f" The prior move is overextended ({one_day_return:+.1%} one day, "
+                f"{data['return_5d']:+.1%} five days), so the app is watching the opposite direction; "
+                "this is observation only until price confirms reversal."
+            )
         if bullish:
             box_height = max(darvas["box_top"] - darvas["box_bottom"], data["price"] * .01)
             entry = f"Entry only after a 15m/5m hold or retest above Darvas top ${darvas['box_top']:.2f} with volume."
@@ -574,7 +590,7 @@ class SignalEngine:
         return Candidate(symbol, direction, confidence, data["price"], score, thesis, catalysts, risks,
                          entry, invalidation, target, self.earnings_date(symbol), option, details, headlines,
                          setup_status, checklist, darvas, company, catalyst, setup_type, stage,
-                         market_text, a_plus_score)
+                         market_text, a_plus_score, reversal_watch)
 
     def scan(self) -> tuple[list[Candidate], list[str]]:
         candidates: list[Candidate] = []
@@ -589,6 +605,6 @@ class SignalEngine:
                     candidates.append(candidate)
             except Exception as exc:
                 errors.append(f"{symbol}: {exc}")
-        status_rank = {"TRADE SETUP": 2, "WATCH": 1, "SKIP": 0}
+        status_rank = {"TRADE SETUP": 3, "PUT REVERSAL WATCH": 2, "CALL REVERSAL WATCH": 2, "WATCH": 1, "SKIP": 0}
         candidates.sort(key=lambda item: (status_rank[item.setup_status], item.a_plus_score, item.confidence), reverse=True)
         return candidates[: self.config["max_candidates"]], errors
