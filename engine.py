@@ -607,4 +607,6 @@ class SignalEngine:
                 errors.append(f"{symbol}: {exc}")
         status_rank = {"TRADE SETUP": 3, "PUT REVERSAL WATCH": 2, "CALL REVERSAL WATCH": 2, "WATCH": 1, "SKIP": 0}
         candidates.sort(key=lambda item: (status_rank[item.setup_status], item.a_plus_score, item.confidence), reverse=True)
-        return candidates[: self.config["max_candidates"]], errors
+        calls = [item for item in candidates if item.direction == "CALL"][: int(self.config.get("max_call_candidates", 3))]
+        puts = [item for item in candidates if item.direction == "PUT"][: int(self.config.get("max_put_candidates", 3))]
+        return [*calls, *puts], errors

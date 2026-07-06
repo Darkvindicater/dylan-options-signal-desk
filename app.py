@@ -41,6 +41,7 @@ st.title("Options Signal Desk")
 st.caption("Dylan Playbook V2: Market → theme → story → catalyst → stage → leadership → structure → confirmation → option → risk.")
 st.caption("Only TRADE SETUP names have passed the live, liquid, affordable contract gate; WATCH names may appear before a contract qualifies.")
 st.caption("PUT/CALL REVERSAL WATCH means the prior move is stretched; it is not an entry until the underlying confirms a reversal through structure and volume.")
+st.caption("Balanced radar: up to 3 CALL names and 3 PUT names. The app never changes direction merely to fill a quota.")
 
 config = load_config()
 with st.sidebar:
@@ -82,6 +83,11 @@ candidates = st.session_state["candidates"]
 if not candidates:
     st.error("No candidate passed the evidence and risk filters. No trade is a valid result.")
 else:
+    call_count = sum(c.direction == "CALL" for c in candidates)
+    put_count = sum(c.direction == "PUT" for c in candidates)
+    call_metric, put_metric = st.columns(2)
+    call_metric.metric("CALL radar", f"{call_count}/3")
+    put_metric.metric("PUT radar", f"{put_count}/3")
     summary = pd.DataFrame([{
         "Symbol": c.symbol,
         "Status": c.setup_status,
