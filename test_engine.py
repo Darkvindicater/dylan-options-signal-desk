@@ -38,6 +38,16 @@ class EngineTests(unittest.TestCase):
         frame = pd.DataFrame({"Close": prices})
         self.assertTrue(SignalEngine.weinstein_stage(frame).startswith("Stage 2"))
 
+    def test_account_scaled_stock_price(self):
+        engine = SignalEngine({"account_size": 500, "minimum_stock_price": 10, "max_stock_price_per_account_dollar": .4})
+        self.assertEqual(engine.maximum_stock_price(), 200)
+        self.assertTrue(engine.stock_price_fits_account(150))
+        self.assertFalse(engine.stock_price_fits_account(250))
+
+    def test_acquisition_explanation_mentions_dilution(self):
+        explanation = SignalEngine.explain_catalyst("Acquisition catalyst: Company to acquire target")
+        self.assertIn("dilution", explanation)
+
 
 if __name__ == "__main__":
     unittest.main()

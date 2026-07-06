@@ -12,7 +12,7 @@ from engine import SignalEngine
 
 
 ROOT = Path(__file__).parent
-APP_STATE_VERSION = 7
+APP_STATE_VERSION = 8
 
 
 def load_config() -> dict:
@@ -27,7 +27,7 @@ saved_candidates = st.session_state.get("candidates", [])
 candidate_schema_is_current = all(
     hasattr(candidate, field)
     for candidate in saved_candidates
-    for field in ("setup_status", "checklist", "darvas", "company", "catalyst", "setup_type", "a_plus_score", "reversal_watch", "extended_watch")
+    for field in ("setup_status", "checklist", "darvas", "company", "catalyst", "setup_type", "a_plus_score", "reversal_watch", "extended_watch", "catalyst_analysis")
 )
 if (
     st.session_state.get("app_state_version") != APP_STATE_VERSION
@@ -66,6 +66,14 @@ config["minimum_confidence"] = minimum_confidence
 config["automatic_discovery"] = automatic_discovery
 config["discovery_limit"] = discovery_limit
 config["watchlist"] = [s.strip().upper() for s in watchlist.split(",") if s.strip()]
+maximum_stock_price = max(
+    float(config["minimum_stock_price"]),
+    float(account) * float(config.get("max_stock_price_per_account_dollar", .4)),
+)
+st.info(
+    f"Account-scaled universe: stocks from ${config['minimum_stock_price']:.0f} to ${maximum_stock_price:,.0f}. "
+    f"Current maximum premium risk: ${account * risk_pct / 100:,.0f} per contract."
+)
 
 if st.button("Run market scan", type="primary", use_container_width=True):
     with st.spinner("Reading prices, options chains, earnings and recent headlines…"):
@@ -112,6 +120,7 @@ else:
                 st.write(f"**{c.company['name']}** — {c.company['sector']} / {c.company['industry']}")
                 st.write(c.company["business"] or "Business summary unavailable; STORY rule fails.")
                 st.write(f"**Detected catalyst:** {c.catalyst}")
+                st.write(f"**Why it matters / what to verify:** {c.catalyst_analysis}")
                 fundamentals = {
                     "Revenue growth": c.company["revenue_growth"],
                     "Earnings growth": c.company["earnings_growth"],
@@ -162,6 +171,8 @@ else:
             for headline in c.headlines[:6]:
                 mood = "positive" if headline["sentiment"] > .1 else "negative" if headline["sentiment"] < -.1 else "neutral"
                 st.markdown(f"- [{headline['title']}]({headline['link']}) — {mood}")
+                if headline.get("summary"):
+                    st.caption(headline["summary"])
 
 errors = st.session_state.get("errors", [])
 if errors:

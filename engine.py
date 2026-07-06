@@ -43,6 +43,7 @@ class Candidate:
     a_plus_score: int
     reversal_watch: bool
     extended_watch: bool
+    catalyst_analysis: str
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -87,7 +88,7 @@ class SignalEngine:
                 last_price = float(str(row.get("lastsale") or "0").replace("$", "").replace(",", ""))
             except ValueError:
                 continue
-            if market_cap <= 0 or last_price < self.config["minimum_stock_price"]:
+            if market_cap <= 0 or not self.stock_price_fits_account(last_price):
                 continue
             eligible.append((market_cap, symbol))
         eligible.sort(reverse=True)
@@ -146,6 +147,15 @@ class SignalEngine:
             raise ValueError("Not enough price history")
         return frame
 
+    def maximum_stock_price(self) -> float:
+        return max(
+            float(self.config["minimum_stock_price"]),
+            float(self.config["account_size"]) * float(self.config.get("max_stock_price_per_account_dollar", .4)),
+        )
+
+    def stock_price_fits_account(self, price: float) -> bool:
+        return float(self.config["minimum_stock_price"]) <= price <= self.maximum_stock_price()
+
     def discover_symbols(self) -> list[str]:
         """Quickly reduce a broad liquid universe before slower news/options analysis."""
         core = self.config.get("discovery_universe", self.config["watchlist"])
@@ -169,7 +179,7 @@ class SignalEngine:
                         continue
                     close = pd.to_numeric(frame["Close"], errors="coerce").dropna()
                     volume = pd.to_numeric(frame["Volume"], errors="coerce").dropna()
-                    if len(close) < 6 or len(volume) < 6 or close.iloc[-1] < self.config["minimum_stock_price"]:
+                    if len(close) < 6 or len(volume) < 6 or not self.stock_price_fits_account(float(close.iloc[-1])):
                         continue
                     move_5d = abs(close.iloc[-1] / close.iloc[-6] - 1)
                     volume_ratio = volume.iloc[-1] / max(volume.tail(20).mean(), 1)
@@ -201,8 +211,26 @@ class SignalEngine:
                 "link": item.get("link", ""),
                 "published": item.get("published", ""),
                 "sentiment": round(compound, 3),
+                "summary": re.sub(r"<[^>]+>", " ", str(item.get("summary", ""))).strip()[:500],
             })
         return items
+
+    @staticmethod
+    def explain_catalyst(catalyst: str) -> str:
+        text = catalyst.lower()
+        if "acquisition" in text or "acquire" in text:
+            return "M&A can expand the business and market opportunity, but verify deal funding, shareholder dilution, regulatory approval, integration risk, and whether the first move already priced in the benefit."
+        if "earnings" in text or "guidance" in text or "forecast" in text:
+            return "Compare reported results and forward guidance with expectations. Revenue quality, margins, guidance changes, and the market's prior positioning matter more than a simple beat or miss."
+        if "fda" in text or "approval" in text or "regulatory" in text:
+            return "Regulatory news can reprice biotechnology quickly. Verify the official decision, indication, label, remaining trial risk, cash runway, and whether volatility already expanded too far."
+        if "upgrade" in text or "downgrade" in text or "analyst" in text:
+            return "Analyst actions matter most when estimates, assumptions, or price targets materially change and price/volume confirms that institutions agree."
+        if "contract" in text or "partnership" in text:
+            return "Verify contract size, duration, revenue timing, customer concentration, and whether the economics are material relative to the company's existing business."
+        if "no named catalyst" in text:
+            return "No verified event explains the move. Treat it as technical or sector flow and require stronger price confirmation before considering a trade."
+        return "Verify the original source, timestamp, financial materiality, market expectations, and whether price and volume confirm the headline."
 
     def company_check(self, symbol: str) -> dict[str, Any]:
         try:
@@ -483,7 +511,7 @@ class SignalEngine:
         frame = self.market_data(symbol)
         data = self.indicators(frame)
         if (
-            data["price"] < self.config["minimum_stock_price"]
+            not self.stock_price_fits_account(data["price"])
             or data["avg_volume"] < self.config["minimum_average_volume"]
             or data["price"] * data["avg_volume"] < self.config.get("minimum_average_dollar_volume", 0)
         ):
@@ -625,7 +653,8 @@ class SignalEngine:
         return Candidate(symbol, direction, confidence, data["price"], score, thesis, catalysts, risks,
                          entry, invalidation, target, self.earnings_date(symbol), option, details, headlines,
                          setup_status, checklist, darvas, company, catalyst, setup_type, stage,
-                         market_text, a_plus_score, reversal_watch, extended_watch)
+                         market_text, a_plus_score, reversal_watch, extended_watch,
+                         self.explain_catalyst(catalyst))
 
     def scan(self) -> tuple[list[Candidate], list[str]]:
         candidates: list[Candidate] = []
