@@ -48,6 +48,21 @@ class EngineTests(unittest.TestCase):
         explanation = SignalEngine.explain_catalyst("Acquisition catalyst: Company to acquire target")
         self.assertIn("dilution", explanation)
 
+    def test_trade_setup_default_holding_plan(self):
+        plan = SignalEngine.holding_plan(
+            "TRADE SETUP",
+            {"days_to_expiry": 30},
+            "Not available",
+            68,
+            False,
+            False,
+        )
+        self.assertEqual(plan["suggested_hold"], "3-5 trading days after entry")
+
+    def test_watchlist_has_no_entry_hold(self):
+        plan = SignalEngine.holding_plan("WATCH", None, "Not available", 60, False, False)
+        self.assertIn("No hold yet", plan["suggested_hold"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -44,6 +44,7 @@ class Candidate:
     reversal_watch: bool
     extended_watch: bool
     catalyst_analysis: str
+    holding_plan: dict[str, Any]
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -398,6 +399,74 @@ class SignalEngine:
         # Calibrated display range deliberately capped: heuristic evidence is never certainty.
         return int(round(50 + 28 * (1 - math.exp(-abs(score) / 3.2))))
 
+    @staticmethod
+    def trading_days_until(date_text: str) -> int | None:
+        try:
+            if not date_text or date_text in {"Not available", "No upcoming date found"}:
+                return None
+            target = pd.Timestamp(date_text).date()
+            today = datetime.now(timezone.utc).date()
+            days = np.busday_count(today, target)
+            return int(days) if days >= 0 else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def holding_plan(
+        setup_status: str,
+        option: dict[str, Any] | None,
+        earnings: str,
+        confidence: int,
+        reversal_watch: bool,
+        extended_watch: bool,
+    ) -> dict[str, Any]:
+        """Create a practical clock for short swing option trades."""
+        earnings_days = SignalEngine.trading_days_until(earnings)
+        dte = int(option["days_to_expiry"]) if option and option.get("days_to_expiry") is not None else None
+
+        if setup_status != "TRADE SETUP":
+            return {
+                "suggested_hold": "No hold yet - watch 1-2 trading days",
+                "min_trading_days": 0,
+                "max_trading_days": 2,
+                "review_cadence": "Recheck after the first hour, into the close, and again premarket.",
+                "exit_early_if": [
+                    "The Darvas trigger never confirms with volume.",
+                    "News fades or a better catalyst stock takes leadership.",
+                    "For reversal watches, price keeps trending instead of rejecting the stretched move.",
+                ],
+                "rationale": "This is a watchlist idea, not an entry. Let the setup prove itself before starting the 3-5 day clock.",
+            }
+
+        min_days, max_days = 3, 5
+        reasons = ["Default Dylan swing-options plan is 3-5 trading days after confirmed entry."]
+        if dte is not None and dte <= 21:
+            min_days, max_days = 1, 3
+            reasons.append("Expiration is close, so theta decay makes the hold shorter.")
+        if earnings_days is not None and earnings_days <= 7:
+            min_days, max_days = 1, min(max_days, 3)
+            reasons.append("Earnings are close; avoid holding a long option through the surprise unless that is intentional.")
+        if confidence >= 72 and dte is not None and dte >= 25 and (earnings_days is None or earnings_days > 10):
+            max_days = max(max_days, 7)
+            reasons.append("Stronger evidence with enough DTE can earn a small runner window.")
+        if reversal_watch or extended_watch:
+            min_days, max_days = 1, 3
+            reasons.append("The move is stretched/reversal-sensitive, so do not overstay without fresh confirmation.")
+
+        return {
+            "suggested_hold": f"{min_days}-{max_days} trading days after entry",
+            "min_trading_days": min_days,
+            "max_trading_days": max_days,
+            "review_cadence": "Review every market close; if up fast on day 1, protect gains instead of hoping.",
+            "exit_early_if": [
+                "Underlying loses the Darvas entry/retest level or hits the chart stop.",
+                "Contract loses about 35-50% of premium before the thesis improves.",
+                "Target 1 hits quickly; consider taking partial profit and only letting a runner continue.",
+                "Fresh news contradicts the catalyst or market/sector flow turns against the trade.",
+            ],
+            "rationale": " ".join(reasons),
+        }
+
     def option_contract(self, symbol: str, direction: str, price: float) -> dict[str, Any] | None:
         ticker = yf.Ticker(symbol)
         today = datetime.now(timezone.utc).date()
@@ -565,6 +634,7 @@ class SignalEngine:
             risks.append("RSI is stretched; reversal risk is elevated.")
         risks.append("Long options can lose 100% of premium through direction, volatility, or time decay.")
         option = self.option_contract(symbol, direction, data["price"])
+        earnings = self.earnings_date(symbol)
         relative_ok, relative_value = self.relative_strength(frame, direction)
         details["relative_vs_spy_5d"] = round(relative_value * 100, 2)
         stage = self.weinstein_stage(frame)
@@ -650,11 +720,12 @@ class SignalEngine:
             entry = f"Entry only after a 15m/5m hold or retest below Darvas bottom ${darvas['box_bottom']:.2f} with volume."
             invalidation = f"Chart stop: above Darvas bottom/retest, approximately ${min(darvas['box_top'], darvas['box_bottom'] + box_height * .25):.2f}."
             target = f"Underlying targets: ${max(0, darvas['box_bottom'] - box_height):.2f}, then ${max(0, darvas['box_bottom'] - box_height * 2):.2f}."
+        holding_plan = self.holding_plan(setup_status, option, earnings, confidence, reversal_watch, extended_watch)
         return Candidate(symbol, direction, confidence, data["price"], score, thesis, catalysts, risks,
-                         entry, invalidation, target, self.earnings_date(symbol), option, details, headlines,
+                         entry, invalidation, target, earnings, option, details, headlines,
                          setup_status, checklist, darvas, company, catalyst, setup_type, stage,
                          market_text, a_plus_score, reversal_watch, extended_watch,
-                         self.explain_catalyst(catalyst))
+                         self.explain_catalyst(catalyst), holding_plan)
 
     def scan(self) -> tuple[list[Candidate], list[str]]:
         candidates: list[Candidate] = []

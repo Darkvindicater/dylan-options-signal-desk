@@ -12,7 +12,7 @@ from engine import SignalEngine
 
 
 ROOT = Path(__file__).parent
-APP_STATE_VERSION = 8
+APP_STATE_VERSION = 9
 
 
 def load_config() -> dict:
@@ -27,7 +27,7 @@ saved_candidates = st.session_state.get("candidates", [])
 candidate_schema_is_current = all(
     hasattr(candidate, field)
     for candidate in saved_candidates
-    for field in ("setup_status", "checklist", "darvas", "company", "catalyst", "setup_type", "a_plus_score", "reversal_watch", "extended_watch", "catalyst_analysis")
+    for field in ("setup_status", "checklist", "darvas", "company", "catalyst", "setup_type", "a_plus_score", "reversal_watch", "extended_watch", "catalyst_analysis", "holding_plan")
 )
 if (
     st.session_state.get("app_state_version") != APP_STATE_VERSION
@@ -42,6 +42,7 @@ st.caption("Dylan Playbook V2: Market → theme → story → catalyst → stage
 st.caption("Only TRADE SETUP names have passed the live, liquid, affordable contract gate; WATCH names may appear before a contract qualifies.")
 st.caption("PUT/CALL REVERSAL WATCH means the prior move is stretched; it is not an entry until the underlying confirms a reversal through structure and volume.")
 st.caption("EXTENDED WATCH means momentum remains intact but chasing is blocked until a new base, hold, or retest forms.")
+st.caption("Hold clock: TRADE SETUP ideas default to 3-5 trading days, shortened near earnings, expiration, or failed structure.")
 st.caption("Balanced radar: up to 3 CALL names and 3 PUT names. The app never changes direction merely to fill a quota.")
 
 config = load_config()
@@ -105,6 +106,7 @@ else:
         "A+ score": f"{c.a_plus_score}/100",
         "Confidence*": f"{c.confidence}%",
         "Stock price": f"${c.price:.2f}",
+        "Suggested hold": c.holding_plan["suggested_hold"],
         "Affordable contract": c.option["contract"] if c.option else "None found",
         "Premium / max loss": f"${c.option['estimated_cost_and_max_loss']:.2f}" if c.option else "—",
         "Earnings": c.earnings,
@@ -136,6 +138,13 @@ else:
                 st.write(c.entry_idea)
                 st.write(c.invalidation)
                 st.write(c.target_idea)
+                st.markdown("**Hold / exit clock**")
+                st.write(f"Suggested hold: {c.holding_plan['suggested_hold']}")
+                st.write(c.holding_plan["rationale"])
+                st.write(f"Review cadence: {c.holding_plan['review_cadence']}")
+                st.markdown("Exit early if:")
+                for item in c.holding_plan["exit_early_if"]:
+                    st.write(f"- {item}")
                 st.markdown("**Risks**")
                 for item in c.risks:
                     st.write(f"• {item}")
