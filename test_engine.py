@@ -87,6 +87,22 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(quality["actionable_catalyst"])
         self.assertIn("News", quality["source_type"])
 
+    def test_move_discovery_finds_relief_bounce(self):
+        signal = SignalEngine.move_discovery_signal(
+            pd.Series([100, 101, 100, 99, 100, 96, 99], dtype=float),
+            pd.Series([1_000_000, 1_100_000, 900_000, 1_000_000, 950_000, 1_200_000, 700_000], dtype=float),
+        )
+        self.assertEqual(signal["pattern"], "relief_bounce")
+        self.assertGreater(signal["score"], 0)
+
+    def test_move_discovery_finds_failed_bounce(self):
+        signal = SignalEngine.move_discovery_signal(
+            pd.Series([100, 99, 100, 101, 100, 104, 100], dtype=float),
+            pd.Series([1_000_000, 1_100_000, 900_000, 1_000_000, 950_000, 1_200_000, 1_400_000], dtype=float),
+        )
+        self.assertEqual(signal["pattern"], "failed_bounce")
+        self.assertGreater(signal["score"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

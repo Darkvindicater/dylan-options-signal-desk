@@ -158,6 +158,59 @@ class SignalEngine:
     def stock_price_fits_account(self, price: float) -> bool:
         return float(self.config["minimum_stock_price"]) <= price <= self.maximum_stock_price()
 
+    @staticmethod
+    def move_discovery_signal(close: pd.Series, volume: pd.Series) -> dict[str, Any]:
+        """Find CAG-style bounce/fade stocks before full news analysis."""
+        close = pd.to_numeric(close, errors="coerce").dropna()
+        volume = pd.to_numeric(volume, errors="coerce").dropna()
+        if len(close) < 6 or len(volume) < 6:
+            return {"score": 0.0, "pattern": "none", "direction_hint": "NONE"}
+
+        returns = close.pct_change().dropna()
+        if len(returns) < 2:
+            return {"score": 0.0, "pattern": "none", "direction_hint": "NONE"}
+
+        latest = float(returns.iloc[-1])
+        previous = float(returns.iloc[-2])
+        five_day = float(close.iloc[-1] / close.iloc[-6] - 1)
+        volume_ratio = float(volume.iloc[-1] / max(volume.tail(20).mean(), 1))
+        closes_near_day_high_proxy = latest > 0 and close.iloc[-1] >= close.tail(3).max() * .995
+        closes_near_day_low_proxy = latest < 0 and close.iloc[-1] <= close.tail(3).min() * 1.005
+
+        score = 0.0
+        pattern = "none"
+        direction_hint = "NONE"
+        if latest >= .015 and previous <= -.025:
+            pattern = "relief_bounce"
+            direction_hint = "CALL_HOLD_OR_PUT_REJECTION"
+            score = abs(previous) * 140 + latest * 120 + min(volume_ratio, 3) * 8
+            if volume_ratio < .8:
+                score += 8  # weak-volume bounce can be a clean rejection watch
+            if closes_near_day_high_proxy:
+                score += 4
+        elif latest <= -.015 and previous >= .025:
+            pattern = "failed_bounce"
+            direction_hint = "PUT_CONTINUATION_OR_CALL_REVERSAL"
+            score = abs(previous) * 140 + abs(latest) * 120 + min(volume_ratio, 3) * 8
+            if volume_ratio >= 1.0:
+                score += 8
+            if closes_near_day_low_proxy:
+                score += 4
+        elif abs(latest) >= .035 and volume_ratio >= 1.2:
+            pattern = "high_volume_momentum"
+            direction_hint = "CALL" if latest > 0 else "PUT"
+            score = abs(latest) * 120 + min(volume_ratio, 3) * 12 + abs(five_day) * 30
+
+        return {
+            "score": round(score, 3),
+            "pattern": pattern,
+            "direction_hint": direction_hint,
+            "latest_daily_move": round(latest * 100, 2),
+            "previous_daily_move": round(previous * 100, 2),
+            "five_day_move": round(five_day * 100, 2),
+            "volume_vs_20d": round(volume_ratio, 2),
+        }
+
     def discover_symbols(self) -> list[str]:
         """Quickly reduce a broad liquid universe before slower news/options analysis."""
         core = self.config.get("discovery_universe", self.config["watchlist"])
@@ -167,8 +220,10 @@ class SignalEngine:
             broad = []
         universe = list(dict.fromkeys([*core, *broad]))
         limit = min(int(self.config.get("discovery_limit", 20)), len(universe))
+        move_limit = min(int(self.config.get("move_discovery_limit", 20)), len(universe))
         try:
             ranked: list[tuple[float, str]] = []
+            move_ranked: list[tuple[float, str]] = []
             for start in range(0, len(universe), 200):
                 symbols = universe[start:start + 200]
                 batch = yf.download(
@@ -188,14 +243,19 @@ class SignalEngine:
                     dollar_volume = close.iloc[-1] * volume.tail(20).mean()
                     if dollar_volume < 20_000_000:
                         continue
+                    move_signal = self.move_discovery_signal(close, volume)
+                    if move_signal["score"] > 0:
+                        move_ranked.append((float(move_signal["score"]), symbol))
                     ranked.append((move_5d * 4 + min(volume_ratio, 4) / 4, symbol))
             ranked.sort(reverse=True)
+            move_ranked.sort(reverse=True)
             selected = [symbol for _, symbol in ranked[:limit]]
+            move_names = [symbol for _, symbol in move_ranked[:move_limit]]
             try:
                 news_names = self.news_discovery_symbols()
             except Exception:
                 news_names = []
-            priority = [*self.config.get("priority_symbols", []), *news_names, *selected]
+            priority = [*self.config.get("priority_symbols", []), *news_names, *move_names, *selected]
             return list(dict.fromkeys(priority))
         except Exception:
             return self.config["watchlist"]

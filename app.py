@@ -12,7 +12,7 @@ from engine import SignalEngine
 
 
 ROOT = Path(__file__).parent
-APP_STATE_VERSION = 10
+APP_STATE_VERSION = 11
 
 
 def load_config() -> dict:
@@ -45,6 +45,7 @@ st.caption("PUT/CALL REVERSAL WATCH means the prior move is stretched; it is not
 st.caption("EXTENDED WATCH means momentum remains intact but chasing is blocked until a new base, hold, or retest forms.")
 st.caption("Hold clock: TRADE SETUP ideas default to 3-5 trading days, shortened near earnings, expiration, or failed structure.")
 st.caption("Move source check: separates real news + volume moves from relief bounces, pre-earnings positioning, and index/rebalance flow.")
+st.caption("CAG-style move hunter: looks for two-day bounce/fade patterns, then waits for hold or rejection confirmation.")
 st.caption("Balanced radar: up to 3 CALL names and 3 PUT names. The app never changes direction merely to fill a quota.")
 
 config = load_config()
@@ -55,11 +56,13 @@ with st.sidebar:
     minimum_confidence = st.slider("Minimum model confidence", 50, 75, int(config["minimum_confidence"]), 1)
     automatic_discovery = st.toggle("Automatic market discovery", value=bool(config.get("automatic_discovery", True)))
     discovery_limit = st.slider("Stocks sent to full news analysis", 10, 30, int(config.get("discovery_limit", 20)), 5)
+    move_discovery_limit = st.slider("CAG-style bounce/fade stocks analyzed", 5, 40, int(config.get("move_discovery_limit", 20)), 5)
     st.caption(
         f"Discovery keeps {len(config.get('discovery_universe', []))} core symbols and adds the live top "
         f"{config.get('top_market_universe_size', 0):,} U.S.-listed stocks, then fully analyzes the strongest movers."
     )
     st.caption("A second news lane adds fresh earnings, FDA, guidance, contract, acquisition, partnership and analyst-action names before ranking.")
+    st.caption("A third move-hunter lane adds stocks bouncing after a hard selloff, fading after a pop, or moving on high volume.")
     watchlist = st.text_area("Watchlist", ", ".join(config["watchlist"]))
     st.warning("A $500 account should not target fixed daily income. One long option can lose its entire premium.")
 
@@ -68,6 +71,7 @@ config["max_risk_per_trade_pct"] = risk_pct
 config["minimum_confidence"] = minimum_confidence
 config["automatic_discovery"] = automatic_discovery
 config["discovery_limit"] = discovery_limit
+config["move_discovery_limit"] = move_discovery_limit
 config["watchlist"] = [s.strip().upper() for s in watchlist.split(",") if s.strip()]
 maximum_stock_price = max(
     float(config["minimum_stock_price"]),
