@@ -63,6 +63,30 @@ class EngineTests(unittest.TestCase):
         plan = SignalEngine.holding_plan("WATCH", None, "Not available", 60, False, False)
         self.assertIn("No hold yet", plan["suggested_hold"])
 
+    def test_relief_bounce_is_not_actionable_catalyst(self):
+        quality = SignalEngine.move_quality(
+            "PUT",
+            {"volume_ratio": .9, "latest_volume_ratio": .4},
+            pd.Series([-.04, .03]),
+            [{"title": "Company expected to report earnings next week"}],
+            "Earnings/results catalyst: Company expected to report earnings next week",
+            "Not available",
+        )
+        self.assertEqual(quality["source_type"], "Relief bounce")
+        self.assertFalse(quality["actionable_catalyst"])
+
+    def test_material_news_with_volume_is_actionable(self):
+        quality = SignalEngine.move_quality(
+            "CALL",
+            {"volume_ratio": 1.4, "latest_volume_ratio": 1.6},
+            pd.Series([.01, .04]),
+            [{"title": "Company beats estimates and raises guidance"}],
+            "Earnings/results catalyst: Company beats estimates and raises guidance",
+            "Not available",
+        )
+        self.assertTrue(quality["actionable_catalyst"])
+        self.assertIn("News", quality["source_type"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -45,6 +45,7 @@ class Candidate:
     extended_watch: bool
     catalyst_analysis: str
     holding_plan: dict[str, Any]
+    move_quality: dict[str, Any]
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -357,6 +358,7 @@ class SignalEngine:
             "return_5d": float(close.pct_change(5).iloc[-1]),
             "return_20d": float(close.pct_change(20).iloc[-1]),
             "volume_ratio": float(volume.tail(5).mean() / max(volume.tail(30).mean(), 1)),
+            "latest_volume_ratio": float(volume.iloc[-1] / max(volume.tail(30).mean(), 1)),
             "avg_volume": float(volume.tail(30).mean()),
             "recent_high": float(recent_high),
             "recent_low": float(recent_low),
@@ -465,6 +467,121 @@ class SignalEngine:
                 "Fresh news contradicts the catalyst or market/sector flow turns against the trade.",
             ],
             "rationale": " ".join(reasons),
+        }
+
+    @staticmethod
+    def move_quality(
+        direction: str,
+        data: dict[str, float],
+        daily_returns: pd.Series,
+        headlines: list[dict[str, Any]],
+        catalyst: str,
+        earnings: str,
+    ) -> dict[str, Any]:
+        """Explain whether the move looks catalyst-backed or only a technical bounce/fade."""
+        latest_return = float(daily_returns.iloc[-1]) if len(daily_returns) else 0.0
+        previous_return = float(daily_returns.iloc[-2]) if len(daily_returns) >= 2 else 0.0
+        latest_volume_ratio = float(data.get("latest_volume_ratio", data.get("volume_ratio", 1.0)))
+        text = " ".join(str(headline.get("title", "")) for headline in headlines).lower()
+        catalyst_text = catalyst.lower()
+        earnings_days = SignalEngine.trading_days_until(earnings)
+
+        flags: list[str] = []
+        verify: list[str] = []
+        source_type = "Technical / sector flow"
+        label = "No strong source found yet"
+        score = 45
+        actionable_catalyst = False
+
+        material_terms = (
+            "reported", "beats", "beat estimates", "raises guidance", "raised guidance",
+            "cuts guidance", "cut guidance", "wins contract", "contract award",
+            "fda approval", "approved", "acquires", "acquisition", "merger",
+            "strategic partnership", "upgrade", "downgrade",
+        )
+        pre_event_terms = (
+            "will release", "to release", "ahead of", "expected to report",
+            "earnings scheduled", "forecasters", "expectations ahead",
+        )
+        index_terms = ("index", "s&p 500", "smallcap", "rebalanc", "removed from")
+        value_terms = ("looks cheap", "undervalued", "dividend yield", "defensive appeal")
+
+        has_material_news = any(term in text or term in catalyst_text for term in material_terms)
+        has_pre_event_news = any(term in text for term in pre_event_terms) or (
+            earnings_days is not None and earnings_days <= 10 and "earnings" in text
+        )
+        has_index_flow = any(term in text for term in index_terms)
+        has_value_discussion = any(term in text for term in value_terms)
+        relief_bounce = latest_return >= 0.015 and previous_return <= -0.025
+        failed_bounce = latest_return <= -0.015 and previous_return >= 0.025
+        low_volume = latest_volume_ratio < 0.8
+        high_volume = latest_volume_ratio >= 1.2
+
+        if has_material_news and high_volume:
+            source_type = "News + volume confirmed"
+            label = "Real catalyst with volume confirmation"
+            score = 80
+            actionable_catalyst = True
+            flags.append("Headline appears material and price is moving with above-baseline volume.")
+        elif has_material_news:
+            source_type = "News, volume not confirmed"
+            label = "Real catalyst, but volume still needs confirmation"
+            score = 65
+            actionable_catalyst = True
+            flags.append("Headline appears material, but volume is not yet strong enough for full confirmation.")
+        elif relief_bounce:
+            source_type = "Relief bounce"
+            label = "Bounce after prior selloff - not fresh bullish news"
+            score = 35
+            flags.append(f"Latest daily move is {latest_return:+.1%} after a {previous_return:+.1%} prior-day drop.")
+            verify.append("For CALLs, require hold above the bounce high with stronger volume.")
+            verify.append("For PUTs, watch for rejection back under the prior close/low.")
+        elif failed_bounce:
+            source_type = "Failed bounce / downside reversal"
+            label = "Down move after prior pop - possible put flow"
+            score = 60
+            actionable_catalyst = "downgrade" in text or "cuts guidance" in text or "cut guidance" in text
+            flags.append(f"Latest daily move is {latest_return:+.1%} after a {previous_return:+.1%} prior-day pop.")
+            verify.append("For PUTs, require price to stay below the failed breakout area.")
+        elif has_pre_event_news:
+            source_type = "Pre-earnings positioning"
+            label = "Earnings are coming - positioning, not results yet"
+            score = 50
+            flags.append("Headlines are about upcoming expectations, not a reported beat/miss yet.")
+            verify.append("Check whether analysts changed estimates or only repeated the earnings date.")
+        elif has_index_flow:
+            source_type = "Index / rebalance flow"
+            label = "Possible index/rebalance flow - can fade quickly"
+            score = 45
+            flags.append("Index changes can cause forced buying/selling that may not reflect business improvement.")
+            verify.append("Wait for normal-volume follow-through after index flow settles.")
+        elif has_value_discussion:
+            source_type = "Value / dividend discussion"
+            label = "Value bounce story - needs chart confirmation"
+            score = 45
+            flags.append("Cheap valuation or dividend talk can create a bounce without changing the trend.")
+            verify.append("Confirm institutions are actually buying with volume and relative strength.")
+
+        if low_volume:
+            score = min(score, 55)
+            flags.append(f"Latest volume is only {latest_volume_ratio:.2f}x its 30-day baseline.")
+        if direction == "CALL" and latest_return < 0:
+            flags.append("Price action is not confirming the CALL direction today.")
+        if direction == "PUT" and latest_return > 0:
+            flags.append("Price action is bouncing against the PUT direction today; wait for rejection.")
+        if not verify:
+            verify.append("Verify the original headline source, timestamp, price reaction, and volume before entry.")
+
+        return {
+            "label": label,
+            "source_type": source_type,
+            "score": int(round(score)),
+            "actionable_catalyst": actionable_catalyst,
+            "latest_daily_move": round(latest_return * 100, 2),
+            "previous_daily_move": round(previous_return * 100, 2),
+            "latest_volume_vs_30d": round(latest_volume_ratio, 2),
+            "flags": flags,
+            "verify": verify,
         }
 
     def option_contract(self, symbol: str, direction: str, price: float) -> dict[str, Any] | None:
@@ -616,6 +733,9 @@ class SignalEngine:
         confidence = self.confidence(score)
         if confidence < self.config["minimum_confidence"]:
             return None
+        option = self.option_contract(symbol, direction, data["price"])
+        earnings = self.earnings_date(symbol)
+        move_quality = self.move_quality(direction, data, daily_returns, headlines, catalyst, earnings)
         catalysts = []
         risks = []
         if details["trend"] * score > 0:
@@ -626,6 +746,10 @@ class SignalEngine:
             catalysts.append("Recent headline sentiment supports the setup.")
         if data["volume_ratio"] > 1.1:
             catalysts.append("Recent volume is above its 30-day baseline.")
+        if move_quality["actionable_catalyst"]:
+            catalysts.append(f"Source-of-move check: {move_quality['label']}.")
+        else:
+            risks.append(f"Source-of-move warning: {move_quality['label']}.")
         if abs(details["news_sentiment"]) < 0.2:
             risks.append("Headlines provide little directional confirmation.")
         if data["volume_ratio"] < 0.9:
@@ -633,8 +757,6 @@ class SignalEngine:
         if data["rsi14"] > 70 or data["rsi14"] < 30:
             risks.append("RSI is stretched; reversal risk is elevated.")
         risks.append("Long options can lose 100% of premium through direction, volatility, or time decay.")
-        option = self.option_contract(symbol, direction, data["price"])
-        earnings = self.earnings_date(symbol)
         relative_ok, relative_value = self.relative_strength(frame, direction)
         details["relative_vs_spy_5d"] = round(relative_value * 100, 2)
         stage = self.weinstein_stage(frame)
@@ -665,7 +787,7 @@ class SignalEngine:
         checklist = {
             "Story / thesis quality": story_exists and not_late,
             "Fundamental / business evidence": fundamental_evidence,
-            "Real current catalyst": catalyst_exists,
+            "Real current catalyst": catalyst_exists and move_quality["actionable_catalyst"],
             "Correct Weinstein stage": stage_ok,
             "Leadership / relative strength or weakness": relative_ok,
             "Clean Darvas box / base / structure": clean_structure,
@@ -676,16 +798,37 @@ class SignalEngine:
         }
         checklist_score = sum(checklist.values())
         a_plus_score = checklist_score * 10
-        required_core = catalyst_exists and not_late and stage_ok and darvas["breakout_confirmed"] and darvas["volume_confirmed"]
+        required_core = (
+            catalyst_exists
+            and move_quality["actionable_catalyst"]
+            and not_late
+            and stage_ok
+            and darvas["breakout_confirmed"]
+            and darvas["volume_confirmed"]
+        )
+        move_watch = (
+            checklist_score >= 5
+            and (
+                catalyst_exists
+                or move_quality["source_type"] in {
+                    "Relief bounce",
+                    "Failed bounce / downside reversal",
+                    "Pre-earnings positioning",
+                    "Index / rebalance flow",
+                    "Value / dividend discussion",
+                }
+            )
+        )
         setup_status = "TRADE SETUP" if checklist_score >= self.config["minimum_checklist_score"] and required_core and option_liquid else (
-            "WATCH" if checklist_score >= 6 else "SKIP"
+            "WATCH" if checklist_score >= 6 else "MOVE WATCH" if move_watch else "SKIP"
         )
         if reversal_watch:
             setup_status = "PUT REVERSAL WATCH" if direction == "PUT" else "CALL REVERSAL WATCH"
         elif extended_watch:
             setup_status = "EXTENDED CALL WATCH" if direction == "CALL" else "EXTENDED PUT WATCH"
         bullish = direction == "CALL"
-        setup_type = ("Reversal watch - failed level, but not approved until confirmation" if reversal_watch else
+        setup_type = (f"Move-source watch - {move_quality['source_type']}; not an approved entry" if setup_status == "MOVE WATCH" else
+            "Reversal watch - failed level, but not approved until confirmation" if reversal_watch else
             "Extended continuation watch - wait for a base, hold, or retest; do not chase" if extended_watch else
             "Setup 3 - Failed Story Breakdown PUT" if not bullish else
             "Setup 2 - Leader Continuation CALL" if stage.startswith("Stage 2") and relative_ok else
@@ -696,7 +839,8 @@ class SignalEngine:
             f"{symbol} has a {score_label} momentum/news composite score of {score:+.2f}. "
             f"Price is {'above' if data['price'] > data['sma50'] else 'below'} its 50-day average, "
             f"with RSI {data['rsi14']:.1f} and 5-day return {data['return_5d']:.1%}. "
-            f"Weinstein classification: {stage}. Market: {market_text}."
+            f"Weinstein classification: {stage}. Market: {market_text}. "
+            f"Move source: {move_quality['label']} ({move_quality['score']}/100)."
         )
         if reversal_watch:
             thesis += (
@@ -725,7 +869,7 @@ class SignalEngine:
                          entry, invalidation, target, earnings, option, details, headlines,
                          setup_status, checklist, darvas, company, catalyst, setup_type, stage,
                          market_text, a_plus_score, reversal_watch, extended_watch,
-                         self.explain_catalyst(catalyst), holding_plan)
+                         self.explain_catalyst(catalyst), holding_plan, move_quality)
 
     def scan(self) -> tuple[list[Candidate], list[str]]:
         candidates: list[Candidate] = []
@@ -741,7 +885,8 @@ class SignalEngine:
             except Exception as exc:
                 errors.append(f"{symbol}: {exc}")
         status_rank = {"TRADE SETUP": 4, "PUT REVERSAL WATCH": 3, "CALL REVERSAL WATCH": 3,
-                       "EXTENDED CALL WATCH": 2, "EXTENDED PUT WATCH": 2, "WATCH": 1, "SKIP": 0}
+                       "EXTENDED CALL WATCH": 2, "EXTENDED PUT WATCH": 2, "MOVE WATCH": 2,
+                       "WATCH": 1, "SKIP": 0}
         candidates.sort(key=lambda item: (status_rank[item.setup_status], item.a_plus_score, item.confidence), reverse=True)
         calls = [item for item in candidates if item.direction == "CALL"][: int(self.config.get("max_call_candidates", 3))]
         puts = [item for item in candidates if item.direction == "PUT"][: int(self.config.get("max_put_candidates", 3))]

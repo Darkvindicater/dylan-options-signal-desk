@@ -12,7 +12,7 @@ from engine import SignalEngine
 
 
 ROOT = Path(__file__).parent
-APP_STATE_VERSION = 9
+APP_STATE_VERSION = 10
 
 
 def load_config() -> dict:
@@ -27,7 +27,7 @@ saved_candidates = st.session_state.get("candidates", [])
 candidate_schema_is_current = all(
     hasattr(candidate, field)
     for candidate in saved_candidates
-    for field in ("setup_status", "checklist", "darvas", "company", "catalyst", "setup_type", "a_plus_score", "reversal_watch", "extended_watch", "catalyst_analysis", "holding_plan")
+    for field in ("setup_status", "checklist", "darvas", "company", "catalyst", "setup_type", "a_plus_score", "reversal_watch", "extended_watch", "catalyst_analysis", "holding_plan", "move_quality")
 )
 if (
     st.session_state.get("app_state_version") != APP_STATE_VERSION
@@ -40,9 +40,11 @@ if (
 st.title("Options Signal Desk")
 st.caption("Dylan Playbook V2: Market → theme → story → catalyst → stage → leadership → structure → confirmation → option → risk.")
 st.caption("Only TRADE SETUP names have passed the live, liquid, affordable contract gate; WATCH names may appear before a contract qualifies.")
+st.caption("MOVE WATCH means the move is worth studying, but it is not an approved entry.")
 st.caption("PUT/CALL REVERSAL WATCH means the prior move is stretched; it is not an entry until the underlying confirms a reversal through structure and volume.")
 st.caption("EXTENDED WATCH means momentum remains intact but chasing is blocked until a new base, hold, or retest forms.")
 st.caption("Hold clock: TRADE SETUP ideas default to 3-5 trading days, shortened near earnings, expiration, or failed structure.")
+st.caption("Move source check: separates real news + volume moves from relief bounces, pre-earnings positioning, and index/rebalance flow.")
 st.caption("Balanced radar: up to 3 CALL names and 3 PUT names. The app never changes direction merely to fill a quota.")
 
 config = load_config()
@@ -106,6 +108,7 @@ else:
         "A+ score": f"{c.a_plus_score}/100",
         "Confidence*": f"{c.confidence}%",
         "Stock price": f"${c.price:.2f}",
+        "Move source": c.move_quality["source_type"],
         "Suggested hold": c.holding_plan["suggested_hold"],
         "Affordable contract": c.option["contract"] if c.option else "None found",
         "Premium / max loss": f"${c.option['estimated_cost_and_max_loss']:.2f}" if c.option else "—",
@@ -123,6 +126,19 @@ else:
                 st.write(c.company["business"] or "Business summary unavailable; STORY rule fails.")
                 st.write(f"**Detected catalyst:** {c.catalyst}")
                 st.write(f"**Why it matters / what to verify:** {c.catalyst_analysis}")
+                st.markdown("**Source of move / bounce check**")
+                st.write(f"{c.move_quality['label']} — {c.move_quality['score']}/100 source quality")
+                st.json({
+                    "source type": c.move_quality["source_type"],
+                    "latest daily move %": c.move_quality["latest_daily_move"],
+                    "previous daily move %": c.move_quality["previous_daily_move"],
+                    "latest volume vs 30d": c.move_quality["latest_volume_vs_30d"],
+                })
+                for item in c.move_quality["flags"] or ["No source-of-move warnings detected."]:
+                    st.write(f"- {item}")
+                st.markdown("Verify before entry:")
+                for item in c.move_quality["verify"]:
+                    st.write(f"- {item}")
                 fundamentals = {
                     "Revenue growth": c.company["revenue_growth"],
                     "Earnings growth": c.company["earnings_growth"],
