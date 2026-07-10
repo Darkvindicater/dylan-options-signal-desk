@@ -757,7 +757,8 @@ class SignalEngine:
     @staticmethod
     def confidence(score: float) -> int:
         # Calibrated display range deliberately capped: heuristic evidence is never certainty.
-        return int(round(50 + 28 * (1 - math.exp(-abs(score) / 3.2))))
+        # Strong multi-factor alignment can reach the 80s, but never displays as a sure thing.
+        return int(round(50 + 40 * (1 - math.exp(-abs(score) / 4.0))))
 
     @staticmethod
     def trading_days_until(date_text: str) -> int | None:

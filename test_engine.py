@@ -18,6 +18,11 @@ class EngineTests(unittest.TestCase):
         self.assertGreater(score, 0)
         self.assertGreater(details["trend"], 0)
 
+    def test_confidence_can_reach_80_without_implying_certainty(self):
+        self.assertEqual(SignalEngine.confidence(0), 50)
+        self.assertGreaterEqual(SignalEngine.confidence(7), 80)
+        self.assertLessEqual(SignalEngine.confidence(100), 90)
+
     def test_indicators(self):
         prices = pd.Series(range(1, 81), dtype=float)
         frame = pd.DataFrame({"Close": prices, "Volume": [2_000_000] * 80})

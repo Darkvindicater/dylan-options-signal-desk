@@ -12,7 +12,7 @@ from engine import SignalEngine
 
 
 ROOT = Path(__file__).parent
-APP_STATE_VERSION = 14
+APP_STATE_VERSION = 15
 CANDIDATE_SCHEMA_FIELDS = (
     "setup_status", "checklist", "darvas", "company", "catalyst",
     "setup_type", "a_plus_score", "reversal_watch", "extended_watch",
@@ -62,7 +62,11 @@ with st.sidebar:
     st.header("Risk controls")
     account = st.number_input("Account size ($)", 100, 100000, int(config["account_size"]), 50)
     risk_pct = st.slider("Maximum premium risk per trade", 1, 20, int(config["max_risk_per_trade_pct"]), 1)
-    minimum_confidence = st.slider("Minimum model confidence", 50, 75, int(config["minimum_confidence"]), 1)
+    minimum_confidence = st.slider("Minimum trade confidence", 50, 90, int(config["minimum_confidence"]), 1)
+    high_confidence_only = st.toggle(
+        "Only show names at or above confidence target",
+        value=bool(config.get("high_confidence_only", True)),
+    )
     automatic_discovery = st.toggle("Automatic market discovery", value=bool(config.get("automatic_discovery", True)))
     discovery_limit = st.slider("Stocks sent to full news analysis", 10, 30, int(config.get("discovery_limit", 20)), 5)
     move_discovery_limit = st.slider("CAG-style bounce/fade stocks analyzed", 5, 40, int(config.get("move_discovery_limit", 20)), 5)
@@ -89,6 +93,9 @@ with st.sidebar:
 config["account_size"] = account
 config["max_risk_per_trade_pct"] = risk_pct
 config["minimum_confidence"] = minimum_confidence
+config["high_confidence_only"] = high_confidence_only
+if high_confidence_only:
+    config["watch_minimum_confidence"] = minimum_confidence
 config["automatic_discovery"] = automatic_discovery
 config["discovery_limit"] = discovery_limit
 config["move_discovery_limit"] = move_discovery_limit
@@ -200,8 +207,17 @@ if not candidate_schema_is_current(candidates):
     st.warning("Dave updated the app after your last scan, so I cleared the old cached results. Press **Run market scan** again to get fresh candidates.")
     st.stop()
 if not candidates:
-    st.error("No candidate passed the evidence and risk filters. No trade is a valid result.")
+    if config.get("high_confidence_only", True):
+        st.error(
+            f"No candidate reached the {minimum_confidence}% confidence target with the current risk filters. "
+            "That is not broken — it means the scanner did not find a clean high-confidence setup yet. "
+            "You can raise Max stocks fully analyzed per scan, raise Broad pool pre-ranked, or turn off high-confidence-only to review study radar."
+        )
+    else:
+        st.error("No candidate passed the evidence and risk filters. No trade is a valid result.")
 else:
+    if config.get("high_confidence_only", True):
+        st.success(f"High-confidence mode is on: showing only names at or above {minimum_confidence}% confidence.")
     st.subheader("Dave's 3-stock weekly study list")
     st.caption("These are the best current study candidates from the scan, not a promise to trade. Confirm price, contract, news, and entry level in Robinhood.")
     weekly = sorted(
@@ -220,6 +236,7 @@ else:
             with column:
                 st.markdown(f"#### {c.symbol} - {c.direction}")
                 st.write(f"**{c.setup_status}**")
+                st.write(f"Confidence: **{c.confidence}%**")
                 st.write(f"Edge: {c.advantage_profile['label']} ({c.advantage_profile['score']}/100)")
                 st.write(f"Theme: {', '.join(c.advantage_profile['themes']) or 'No theme'}")
                 st.write(f"Price: ${c.price:.2f}")
@@ -256,7 +273,10 @@ else:
     st.caption("*Confidence is a heuristic evidence score, not the historical win probability or a promise of profit.")
 
     for rank, c in enumerate(candidates, 1):
-        with st.expander(f"#{rank} {c.symbol} — {c.setup_status} — {c.direction} — {c.a_plus_score}/100", expanded=rank == 1):
+        with st.expander(
+            f"#{rank} {c.symbol} — {c.setup_status} — {c.direction} — confidence {c.confidence}% — A+ {c.a_plus_score}/100",
+            expanded=rank == 1,
+        ):
             left, right = st.columns([3, 2])
             with left:
                 st.subheader("Story + catalyst")
@@ -318,6 +338,7 @@ else:
                     st.write(f"• {item}")
             with right:
                 score = sum(c.checklist.values())
+                st.metric("Model confidence", f"{c.confidence}%")
                 st.metric("Playbook A+ score", f"{c.a_plus_score}/100", c.setup_status)
                 st.write(f"**{c.setup_type}**")
                 st.write(f"**Weinstein:** {c.weinstein_stage}")
