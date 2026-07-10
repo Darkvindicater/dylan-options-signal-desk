@@ -5,7 +5,10 @@
   "discovery_limit": 20,
   "news_discovery_limit": 20,
   "move_discovery_limit": 20,
-  "priority_symbols": ["CAG", "LEVI", "VERA"],
+  "theme_discovery_limit": 10,
+  "broad_discovery_pool_size": 200,
+  "max_symbols_to_analyze": 20,
+  "priority_symbols": ["CAG", "LEVI", "VERA", "BROS"],
   "enabled_theme_universes": ["Restaurants", "Retail", "Healthcare", "AI", "Cars / EV", "Beauty", "Technology"],
   "theme_universes": {
     "Restaurants": ["BROS", "CMG", "CAVA", "SHAK", "WEN", "DRI", "EAT", "BLMN", "CAKE", "TXRH", "YUM", "YUMC", "QSR", "DPZ", "PZZA", "JACK", "DIN", "PTLO", "BJRI", "RRGB", "WING", "PLAY", "SBUX", "MCD", "SG"],
@@ -27,6 +30,7 @@
   "max_stock_price_per_account_dollar": 0.4,
   "minimum_average_volume": 500000,
   "minimum_average_dollar_volume": 5000000,
+  "watch_minimum_confidence": 52,
   "option_days_min": 14,
   "option_days_max": 35
   ,"preferred_contract_min": 10

@@ -59,15 +59,28 @@ class SignalEngine:
         self.config = config
         self.sentiment = SentimentIntensityAnalyzer()
         self._market_cache: dict[str, Any] | None = None
+        self._spy_1mo_cache: pd.DataFrame | None = None
         self._nasdaq_rows: list[dict[str, Any]] = []
 
-    def theme_universe_symbols(self) -> list[str]:
+    def enabled_theme_groups(self) -> dict[str, list[str]]:
         themes = self.config.get("theme_universes", {})
         enabled = self.config.get("enabled_theme_universes", [])
-        symbols: list[str] = []
+        groups: dict[str, list[str]] = {}
         for theme in enabled:
-            symbols.extend(themes.get(theme, []))
-        return list(dict.fromkeys(symbol.upper().strip() for symbol in symbols if symbol))
+            symbols = [
+                symbol.upper().strip()
+                for symbol in themes.get(theme, [])
+                if str(symbol).strip()
+            ]
+            if symbols:
+                groups[theme] = list(dict.fromkeys(symbols))
+        return groups
+
+    def theme_universe_symbols(self) -> list[str]:
+        symbols: list[str] = []
+        for theme_symbols in self.enabled_theme_groups().values():
+            symbols.extend(theme_symbols)
+        return list(dict.fromkeys(symbols))
 
     def symbol_themes(self, symbol: str) -> list[str]:
         themes = self.config.get("theme_universes", {})
@@ -228,17 +241,23 @@ class SignalEngine:
     def discover_symbols(self) -> list[str]:
         """Quickly reduce a broad liquid universe before slower news/options analysis."""
         core = self.config.get("discovery_universe", self.config.get("watchlist", []))
+        theme_groups = self.enabled_theme_groups()
         theme_names = self.theme_universe_symbols()
         try:
             broad = self.top_us_symbols()
         except Exception:
             broad = []
+        broad_pool_size = max(0, int(self.config.get("broad_discovery_pool_size", len(broad))))
+        broad = broad[:broad_pool_size]
         universe = list(dict.fromkeys([*theme_names, *core, *broad]))
         limit = min(int(self.config.get("discovery_limit", 20)), len(universe))
         move_limit = min(int(self.config.get("move_discovery_limit", 20)), len(universe))
+        theme_limit = min(int(self.config.get("theme_discovery_limit", 18)), len(theme_names))
+        analysis_limit = max(1, int(self.config.get("max_symbols_to_analyze", 45)))
         try:
             ranked: list[tuple[float, str]] = []
             move_ranked: list[tuple[float, str]] = []
+            rank_scores: dict[str, float] = {}
             for start in range(0, len(universe), 200):
                 symbols = universe[start:start + 200]
                 batch = yf.download(
@@ -261,19 +280,39 @@ class SignalEngine:
                     move_signal = self.move_discovery_signal(close, volume)
                     if move_signal["score"] > 0:
                         move_ranked.append((float(move_signal["score"]), symbol))
-                    ranked.append((move_5d * 4 + min(volume_ratio, 4) / 4, symbol))
+                    rank_score = float(move_5d * 4 + min(volume_ratio, 4) / 4)
+                    rank_scores[symbol] = rank_score
+                    ranked.append((rank_score, symbol))
             ranked.sort(reverse=True)
             move_ranked.sort(reverse=True)
             selected = [symbol for _, symbol in ranked[:limit]]
             move_names = [symbol for _, symbol in move_ranked[:move_limit]]
+            theme_selected: list[str] = []
+            for symbols in theme_groups.values():
+                scored = [
+                    (rank_scores[symbol], symbol)
+                    for symbol in symbols
+                    if symbol in rank_scores
+                ]
+                if scored:
+                    scored.sort(reverse=True)
+                    theme_selected.append(scored[0][1])
+            for _, symbol in sorted(
+                [(rank_scores[symbol], symbol) for symbol in theme_names if symbol in rank_scores],
+                reverse=True,
+            ):
+                if len(theme_selected) >= theme_limit:
+                    break
+                if symbol not in theme_selected:
+                    theme_selected.append(symbol)
             try:
                 news_names = self.news_discovery_symbols()
             except Exception:
                 news_names = []
-            priority = [*self.config.get("priority_symbols", []), *theme_names, *news_names, *move_names, *selected]
-            return list(dict.fromkeys(priority))
+            priority = [*self.config.get("priority_symbols", []), *theme_selected, *news_names, *move_names, *selected]
+            return list(dict.fromkeys(priority))[:analysis_limit]
         except Exception:
-            return self.config["watchlist"]
+            return list(dict.fromkeys(self.config["watchlist"]))[:analysis_limit]
 
     def news(self, symbol: str, company_name: str = "", limit: int = 10) -> list[dict[str, Any]]:
         subject = company_name or symbol
@@ -399,9 +438,10 @@ class SignalEngine:
             "failed_breakdown_down": failed_breakdown_down,
         }
 
-    @staticmethod
-    def relative_strength(symbol_frame: pd.DataFrame, direction: str) -> tuple[bool, float]:
-        spy = yf.download("SPY", period="1mo", interval="1d", auto_adjust=True, progress=False)
+    def relative_strength(self, symbol_frame: pd.DataFrame, direction: str) -> tuple[bool, float]:
+        if self._spy_1mo_cache is None:
+            self._spy_1mo_cache = yf.download("SPY", period="1mo", interval="1d", auto_adjust=True, progress=False)
+        spy = self._spy_1mo_cache
         stock_close = SignalEngine._series(symbol_frame, "Close")
         spy_close = SignalEngine._series(spy, "Close")
         stock_return = float(stock_close.pct_change(5).iloc[-1])
@@ -976,6 +1016,9 @@ class SignalEngine:
         elif setup_status in {"WATCH", "MOVE WATCH", "PUT REVERSAL WATCH", "CALL REVERSAL WATCH"}:
             score += 7
             positives.append(f"{setup_status} is worth studying, but it still needs entry confirmation.")
+        elif setup_status == "STUDY ONLY":
+            score += 3
+            positives.append("STUDY ONLY gives you a name to review, not a trade entry.")
         elif "EXTENDED" in setup_status:
             warnings.append("Move is extended; edge is lower until it bases, holds, or rejects.")
 
@@ -1174,7 +1217,12 @@ class SignalEngine:
             "CALL" if overextended_up else "PUT" if overextended_down else "CALL" if score > 0 else "PUT"
         )
         confidence = self.confidence(score)
-        if confidence < self.config["minimum_confidence"]:
+        minimum_confidence = int(self.config["minimum_confidence"])
+        watch_minimum_confidence = min(
+            minimum_confidence,
+            int(self.config.get("watch_minimum_confidence", max(50, minimum_confidence - 6))),
+        )
+        if confidence < watch_minimum_confidence:
             return None
         option = self.option_contract(symbol, direction, data["price"])
         earnings = self.earnings_date(symbol)
@@ -1262,8 +1310,19 @@ class SignalEngine:
                 }
             )
         )
-        setup_status = "TRADE SETUP" if checklist_score >= self.config["minimum_checklist_score"] and required_core and option_liquid else (
-            "WATCH" if checklist_score >= 6 else "MOVE WATCH" if move_watch else "SKIP"
+        study_only = (
+            catalyst_exists
+            or abs(data["return_5d"]) >= .04
+            or data.get("latest_volume_ratio", 1.0) >= 1.2
+            or bool(self.symbol_themes(symbol))
+        )
+        setup_status = "TRADE SETUP" if (
+            confidence >= minimum_confidence
+            and checklist_score >= self.config["minimum_checklist_score"]
+            and required_core
+            and option_liquid
+        ) else (
+            "WATCH" if checklist_score >= 6 else "MOVE WATCH" if move_watch else "STUDY ONLY" if study_only else "SKIP"
         )
         if reversal_watch:
             setup_status = "PUT REVERSAL WATCH" if direction == "PUT" else "CALL REVERSAL WATCH"
@@ -1271,6 +1330,7 @@ class SignalEngine:
             setup_status = "EXTENDED CALL WATCH" if direction == "CALL" else "EXTENDED PUT WATCH"
         bullish = direction == "CALL"
         setup_type = (f"Move-source watch - {move_quality['source_type']}; not an approved entry" if setup_status == "MOVE WATCH" else
+            "Study only - has a theme, move, or catalyst clue, but not enough confirmation for entry" if setup_status == "STUDY ONLY" else
             "Reversal watch - failed level, but not approved until confirmation" if reversal_watch else
             "Extended continuation watch - wait for a base, hold, or retest; do not chase" if extended_watch else
             "Setup 3 - Failed Story Breakdown PUT" if not bullish else
@@ -1321,6 +1381,8 @@ class SignalEngine:
         candidates: list[Candidate] = []
         errors: list[str] = []
         symbols = self.discover_symbols() if self.config.get("automatic_discovery", False) else self.config["watchlist"]
+        symbols = list(dict.fromkeys(symbol.upper().strip() for symbol in symbols if symbol))
+        symbols = symbols[: max(1, int(self.config.get("max_symbols_to_analyze", len(symbols))))]
         for symbol in symbols:
             try:
                 candidate = self.analyze(symbol.upper().strip())
@@ -1332,7 +1394,7 @@ class SignalEngine:
                 errors.append(f"{symbol}: {exc}")
         status_rank = {"TRADE SETUP": 4, "PUT REVERSAL WATCH": 3, "CALL REVERSAL WATCH": 3,
                        "EXTENDED CALL WATCH": 2, "EXTENDED PUT WATCH": 2, "MOVE WATCH": 2,
-                       "WATCH": 1, "SKIP": 0}
+                       "WATCH": 1, "STUDY ONLY": 1, "SKIP": 0}
         candidates.sort(
             key=lambda item: (
                 status_rank[item.setup_status],

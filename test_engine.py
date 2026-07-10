@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -110,6 +111,88 @@ class EngineTests(unittest.TestCase):
         })
         self.assertEqual(engine.theme_universe_symbols(), ["BROS", "CMG"])
         self.assertEqual(engine.symbol_themes("BROS"), ["Restaurants"])
+
+    def test_discovery_caps_theme_names_before_full_analysis(self):
+        engine = SignalEngine({
+            "watchlist": ["AAA"],
+            "discovery_universe": [],
+            "priority_symbols": ["CAG"],
+            "theme_universes": {
+                "Restaurants": ["BROS", "WING", "CMG"],
+                "Retail": ["LEVI", "LULU"],
+            },
+            "enabled_theme_universes": ["Restaurants", "Retail"],
+            "discovery_limit": 2,
+            "move_discovery_limit": 2,
+            "theme_discovery_limit": 2,
+            "max_symbols_to_analyze": 5,
+            "account_size": 250,
+            "minimum_stock_price": 10,
+            "max_stock_price_per_account_dollar": .4,
+        })
+        engine.top_us_symbols = lambda: []
+        engine.news_discovery_symbols = lambda: ["NEWS1", "NEWS2"]
+
+        def fake_download(symbols, **_kwargs):
+            frames = {}
+            close_sets = {
+                "BROS": [40, 41, 42, 43, 44, 50],
+                "WING": [80, 81, 80, 82, 81, 82],
+                "CMG": [150, 151, 152, 153, 154, 155],
+                "LEVI": [18, 18.5, 19, 19.5, 20, 23],
+                "LULU": [300, 301, 302, 303, 304, 305],
+            }
+            for symbol in symbols:
+                closes = close_sets.get(symbol, [30, 30.5, 31, 31.5, 32, 33])
+                frames[symbol] = pd.DataFrame({
+                    "Close": closes,
+                    "Volume": [2_000_000] * len(closes),
+                })
+            return pd.concat(frames, axis=1)
+
+        with patch("engine.yf.download", side_effect=fake_download):
+            symbols = engine.discover_symbols()
+
+        self.assertLessEqual(len(symbols), 5)
+        self.assertIn("CAG", symbols)
+        self.assertIn("BROS", symbols)
+        self.assertIn("LEVI", symbols)
+        self.assertNotIn("WING", symbols)
+
+    def test_broad_discovery_pool_limits_downloaded_symbols(self):
+        engine = SignalEngine({
+            "watchlist": [],
+            "discovery_universe": [],
+            "priority_symbols": [],
+            "theme_universes": {},
+            "enabled_theme_universes": [],
+            "discovery_limit": 3,
+            "move_discovery_limit": 3,
+            "theme_discovery_limit": 0,
+            "broad_discovery_pool_size": 2,
+            "max_symbols_to_analyze": 10,
+            "account_size": 250,
+            "minimum_stock_price": 10,
+            "max_stock_price_per_account_dollar": .4,
+        })
+        engine.top_us_symbols = lambda: ["AAA", "BBB", "CCC"]
+        engine.news_discovery_symbols = lambda: []
+        downloaded = []
+
+        def fake_download(symbols, **_kwargs):
+            downloaded.extend(symbols)
+            return pd.concat({
+                symbol: pd.DataFrame({
+                    "Close": [20, 21, 22, 23, 24, 25],
+                    "Volume": [2_000_000] * 6,
+                })
+                for symbol in symbols
+            }, axis=1)
+
+        with patch("engine.yf.download", side_effect=fake_download):
+            engine.discover_symbols()
+
+        self.assertEqual(downloaded, ["AAA", "BBB"])
 
     def test_small_account_advantage_rewards_affordable_liquid_contract(self):
         engine = SignalEngine({

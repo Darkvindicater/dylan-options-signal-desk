@@ -12,7 +12,7 @@ from engine import SignalEngine
 
 
 ROOT = Path(__file__).parent
-APP_STATE_VERSION = 13
+APP_STATE_VERSION = 14
 CANDIDATE_SCHEMA_FIELDS = (
     "setup_status", "checklist", "darvas", "company", "catalyst",
     "setup_type", "a_plus_score", "reversal_watch", "extended_watch",
@@ -47,6 +47,7 @@ if (
 st.title("Options Signal Desk")
 st.caption("Dylan Playbook V2: Market → theme → story → catalyst → stage → leadership → structure → confirmation → option → risk.")
 st.caption("Only TRADE SETUP names have passed the live, liquid, affordable contract gate; WATCH names may appear before a contract qualifies.")
+st.caption("STUDY ONLY names are educational radar ideas with a theme, move, or catalyst clue; they are not entries.")
 st.caption("MOVE WATCH means the move is worth studying, but it is not an approved entry.")
 st.caption("PUT/CALL REVERSAL WATCH means the prior move is stretched; it is not an entry until the underlying confirms a reversal through structure and volume.")
 st.caption("EXTENDED WATCH means momentum remains intact but chasing is blocked until a new base, hold, or retest forms.")
@@ -65,6 +66,9 @@ with st.sidebar:
     automatic_discovery = st.toggle("Automatic market discovery", value=bool(config.get("automatic_discovery", True)))
     discovery_limit = st.slider("Stocks sent to full news analysis", 10, 30, int(config.get("discovery_limit", 20)), 5)
     move_discovery_limit = st.slider("CAG-style bounce/fade stocks analyzed", 5, 40, int(config.get("move_discovery_limit", 20)), 5)
+    theme_discovery_limit = st.slider("Theme stocks fully analyzed", 7, 35, int(config.get("theme_discovery_limit", 10)), 1)
+    broad_discovery_pool_size = st.slider("Broad pool pre-ranked", 100, 1000, int(config.get("broad_discovery_pool_size", 200)), 50)
+    max_symbols_to_analyze = st.slider("Max stocks fully analyzed per scan", 10, 60, int(config.get("max_symbols_to_analyze", 20)), 5)
     theme_options = list(config.get("theme_universes", {}).keys())
     enabled_themes = st.multiselect(
         "Theme lanes",
@@ -72,12 +76,13 @@ with st.sidebar:
         default=[theme for theme in config.get("enabled_theme_universes", []) if theme in theme_options],
     )
     st.caption(
-        f"Discovery keeps {len(config.get('discovery_universe', []))} core symbols and adds the live top "
-        f"{config.get('top_market_universe_size', 0):,} U.S.-listed stocks, then fully analyzes the strongest movers."
+        f"Discovery keeps {len(config.get('discovery_universe', []))} core symbols, reads the live top "
+        f"{config.get('top_market_universe_size', 0):,} U.S.-listed stocks, and pre-ranks the first "
+        f"{broad_discovery_pool_size:,} affordable names before full analysis."
     )
     st.caption("A second news lane adds fresh earnings, FDA, guidance, contract, acquisition, partnership and analyst-action names before ranking.")
     st.caption("A third move-hunter lane adds stocks bouncing after a hard selloff, fading after a pop, or moving on high volume.")
-    st.caption("Theme lanes force groups like Restaurants into the scan before the broad-market ranking runs.")
+    st.caption("Theme lanes are pre-ranked first, then the best names go into full news/options analysis so the scan finishes faster.")
     watchlist = st.text_area("Watchlist", ", ".join(config["watchlist"]))
     st.warning("A small account should not target fixed daily income. One long option can lose its entire premium.")
 
@@ -87,6 +92,9 @@ config["minimum_confidence"] = minimum_confidence
 config["automatic_discovery"] = automatic_discovery
 config["discovery_limit"] = discovery_limit
 config["move_discovery_limit"] = move_discovery_limit
+config["theme_discovery_limit"] = theme_discovery_limit
+config["broad_discovery_pool_size"] = broad_discovery_pool_size
+config["max_symbols_to_analyze"] = max_symbols_to_analyze
 config["enabled_theme_universes"] = enabled_themes
 config["watchlist"] = [s.strip().upper() for s in watchlist.split(",") if s.strip()]
 maximum_stock_price = max(
