@@ -13,10 +13,22 @@ from engine import SignalEngine
 
 ROOT = Path(__file__).parent
 APP_STATE_VERSION = 13
+CANDIDATE_SCHEMA_FIELDS = (
+    "setup_status", "checklist", "darvas", "company", "catalyst",
+    "setup_type", "a_plus_score", "reversal_watch", "extended_watch",
+    "catalyst_analysis", "holding_plan", "move_quality", "advantage_profile",
+)
 
 
 def load_config() -> dict:
     return json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+
+
+def candidate_schema_is_current(candidates: list) -> bool:
+    return all(
+        all(hasattr(candidate, field) for field in CANDIDATE_SCHEMA_FIELDS)
+        for candidate in candidates
+    )
 
 
 st.set_page_config(page_title="Options Signal Desk", page_icon="📈", layout="wide")
@@ -24,14 +36,9 @@ st.set_page_config(page_title="Options Signal Desk", page_icon="📈", layout="w
 # Streamlit preserves Python objects across hot reloads. Clear results created by an
 # older Candidate schema before the UI attempts to read newly added fields.
 saved_candidates = st.session_state.get("candidates", [])
-candidate_schema_is_current = all(
-    hasattr(candidate, field)
-    for candidate in saved_candidates
-    for field in ("setup_status", "checklist", "darvas", "company", "catalyst", "setup_type", "a_plus_score", "reversal_watch", "extended_watch", "catalyst_analysis", "holding_plan", "move_quality", "advantage_profile")
-)
 if (
     st.session_state.get("app_state_version") != APP_STATE_VERSION
-    or not candidate_schema_is_current
+    or not candidate_schema_is_current(saved_candidates)
 ):
     for key in ("candidates", "errors", "scan_time"):
         st.session_state.pop(key, None)
@@ -179,6 +186,11 @@ if "candidates" not in st.session_state:
 
 st.caption(f"Last scan: {st.session_state['scan_time']}. Quotes may be delayed; confirm every price in Robinhood.")
 candidates = st.session_state["candidates"]
+if not candidate_schema_is_current(candidates):
+    for key in ("candidates", "errors", "scan_time"):
+        st.session_state.pop(key, None)
+    st.warning("Dave updated the app after your last scan, so I cleared the old cached results. Press **Run market scan** again to get fresh candidates.")
+    st.stop()
 if not candidates:
     st.error("No candidate passed the evidence and risk filters. No trade is a valid result.")
 else:
