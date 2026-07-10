@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pandas as pd
@@ -198,6 +199,41 @@ class EngineTests(unittest.TestCase):
             engine.discover_symbols()
 
         self.assertEqual(downloaded, ["AAA", "BBB"])
+
+    def test_scan_main_list_requires_budget_qualified_contracts(self):
+        engine = SignalEngine({
+            "watchlist": ["CALLGOOD", "CALLEXP", "PUTGOOD", "PUTNONE"],
+            "automatic_discovery": False,
+            "account_size": 350,
+            "max_risk_per_trade_pct": 20,
+            "max_call_candidates": 3,
+            "max_put_candidates": 3,
+            "budget_qualified_main_list": True,
+        })
+
+        def fake_candidate(symbol, direction, option_cost):
+            return SimpleNamespace(
+                symbol=symbol,
+                direction=direction,
+                setup_status="MOVE WATCH",
+                advantage_profile={"score": 80},
+                a_plus_score=70,
+                confidence=82,
+                option=None if option_cost is None else {"estimated_cost_and_max_loss": option_cost},
+            )
+
+        fake_candidates = {
+            "CALLGOOD": fake_candidate("CALLGOOD", "CALL", 65),
+            "CALLEXP": fake_candidate("CALLEXP", "CALL", 800),
+            "PUTGOOD": fake_candidate("PUTGOOD", "PUT", 55),
+            "PUTNONE": fake_candidate("PUTNONE", "PUT", None),
+        }
+        engine.analyze = lambda symbol: fake_candidates[symbol]
+
+        candidates, errors = engine.scan()
+
+        self.assertEqual([candidate.symbol for candidate in candidates], ["CALLGOOD", "PUTGOOD"])
+        self.assertTrue(any("Budget filter found" in error for error in errors))
 
     def test_small_account_advantage_rewards_affordable_liquid_contract(self):
         engine = SignalEngine({

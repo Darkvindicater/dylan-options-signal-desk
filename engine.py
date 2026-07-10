@@ -309,7 +309,14 @@ class SignalEngine:
                 news_names = self.news_discovery_symbols()
             except Exception:
                 news_names = []
-            priority = [*self.config.get("priority_symbols", []), *theme_selected, *news_names, *move_names, *selected]
+            priority = [
+                *self.config.get("priority_symbols", []),
+                *self.config.get("budget_priority_symbols", []),
+                *theme_selected,
+                *news_names,
+                *move_names,
+                *selected,
+            ]
             return list(dict.fromkeys(priority))[:analysis_limit]
         except Exception:
             return list(dict.fromkeys(self.config["watchlist"]))[:analysis_limit]
@@ -1090,21 +1097,37 @@ class SignalEngine:
         contracts["mid"] = (contracts["bid"].fillna(0) + contracts["ask"].fillna(0)) / 2
         contracts["distance"] = (contracts["strike"] - price).abs() / price
         max_cost = self.config["account_size"] * self.config["max_risk_per_trade_pct"] / 100
-        liquid = contracts[
-            (contracts["ask"] > 0)
-            & (contracts["ask"] * 100 <= max_cost)
-            & (contracts["distance"] <= 0.03)
-            & (contracts["openInterest"].fillna(0) >= self.config["minimum_open_interest"])
-            & (contracts["volume"].fillna(0) >= self.config["minimum_option_volume"])
-        ].copy()
-        if liquid.empty:
-            return None
-        liquid["spread_pct"] = (liquid["ask"] - liquid["bid"]) / liquid["ask"].replace(0, np.nan)
-        liquid = liquid[
-            (liquid["spread_pct"] <= 0.25)
-            & (liquid["ask"] * 100 >= self.config["preferred_contract_min"])
-            & (liquid["ask"] * 100 <= self.config["preferred_contract_max"])
-        ]
+        quality_tier = "standard"
+
+        def filter_contracts(max_distance: float, min_open_interest: int, min_volume: int, max_spread: float) -> pd.DataFrame:
+            filtered = contracts[
+                (contracts["ask"] > 0)
+                & (contracts["ask"] * 100 <= max_cost)
+                & (contracts["ask"] * 100 >= self.config["preferred_contract_min"])
+                & (contracts["ask"] * 100 <= self.config["preferred_contract_max"])
+                & (contracts["distance"] <= max_distance)
+                & (contracts["openInterest"].fillna(0) >= min_open_interest)
+                & (contracts["volume"].fillna(0) >= min_volume)
+            ].copy()
+            if filtered.empty:
+                return filtered
+            filtered["spread_pct"] = (filtered["ask"] - filtered["bid"]) / filtered["ask"].replace(0, np.nan)
+            return filtered[filtered["spread_pct"] <= max_spread].copy()
+
+        liquid = filter_contracts(
+            0.03,
+            int(self.config["minimum_open_interest"]),
+            int(self.config["minimum_option_volume"]),
+            0.25,
+        )
+        if liquid.empty and self.config.get("budget_contract_fallback", True):
+            quality_tier = "budget fallback"
+            liquid = filter_contracts(
+                float(self.config.get("fallback_option_max_distance", 0.08)),
+                int(self.config.get("fallback_minimum_open_interest", 50)),
+                int(self.config.get("fallback_minimum_option_volume", 10)),
+                float(self.config.get("fallback_option_max_spread_pct", 0.45)),
+            )
         if liquid.empty:
             return None
         row = liquid.sort_values(["distance", "spread_pct"]).iloc[0]
@@ -1146,12 +1169,24 @@ class SignalEngine:
             "volume": int(row.get("volume", 0) or 0),
             "implied_volatility": round(float(row.get("impliedVolatility", 0)) * 100, 1),
             "spread_pct": round(float(row["spread_pct"]) * 100, 1),
+            "quality_tier": quality_tier,
+            "budget_note": (
+                "Standard liquidity/near-money contract."
+                if quality_tier == "standard"
+                else "Budget fallback: contract fits the account cap, but liquidity, spread, or strike distance is weaker. Use extra caution."
+            ),
             "estimated_delta": round(delta, 3),
             "estimated_gamma": round(gamma, 4),
             "estimated_theta_per_day": round(theta_year / 365, 3),
             "estimated_vega_per_iv_point": round(vega, 3),
             "expiration_scenarios": scenarios,
         }
+
+    def candidate_fits_budget(self, candidate: Candidate) -> bool:
+        if not candidate.option:
+            return False
+        max_cost = float(self.config["account_size"]) * float(self.config["max_risk_per_trade_pct"]) / 100
+        return float(candidate.option.get("estimated_cost_and_max_loss", math.inf)) <= max_cost
 
     @staticmethod
     def weinstein_stage(frame: pd.DataFrame) -> str:
@@ -1384,6 +1419,10 @@ class SignalEngine:
         symbols = self.discover_symbols() if self.config.get("automatic_discovery", False) else self.config["watchlist"]
         symbols = list(dict.fromkeys(symbol.upper().strip() for symbol in symbols if symbol))
         symbols = symbols[: max(1, int(self.config.get("max_symbols_to_analyze", len(symbols))))]
+        call_target = int(self.config.get("max_call_candidates", 3))
+        put_target = int(self.config.get("max_put_candidates", 3))
+        budget_calls_found = 0
+        budget_puts_found = 0
         for symbol in symbols:
             try:
                 candidate = self.analyze(symbol.upper().strip())
@@ -1391,6 +1430,18 @@ class SignalEngine:
                 # stocks are visible before the entry and option gates are ready.
                 if candidate and candidate.setup_status != "SKIP":
                     candidates.append(candidate)
+                    if self.config.get("budget_qualified_main_list", True) and self.candidate_fits_budget(candidate):
+                        if candidate.direction == "CALL":
+                            budget_calls_found += 1
+                        elif candidate.direction == "PUT":
+                            budget_puts_found += 1
+                    if (
+                        self.config.get("budget_qualified_main_list", True)
+                        and self.config.get("stop_after_budget_slate_filled", True)
+                        and budget_calls_found >= call_target
+                        and budget_puts_found >= put_target
+                    ):
+                        break
             except Exception as exc:
                 errors.append(f"{symbol}: {exc}")
         status_rank = {"TRADE SETUP": 4, "PUT REVERSAL WATCH": 3, "CALL REVERSAL WATCH": 3,
@@ -1405,6 +1456,14 @@ class SignalEngine:
             ),
             reverse=True,
         )
-        calls = [item for item in candidates if item.direction == "CALL"][: int(self.config.get("max_call_candidates", 3))]
-        puts = [item for item in candidates if item.direction == "PUT"][: int(self.config.get("max_put_candidates", 3))]
+        main_pool = candidates
+        if self.config.get("budget_qualified_main_list", True):
+            main_pool = [item for item in candidates if self.candidate_fits_budget(item)]
+        calls = [item for item in main_pool if item.direction == "CALL"][:call_target]
+        puts = [item for item in main_pool if item.direction == "PUT"][:put_target]
+        if self.config.get("budget_qualified_main_list", True) and (len(calls) < call_target or len(puts) < put_target):
+            errors.append(
+                f"Budget filter found {len(calls)}/{call_target} CALL and {len(puts)}/{put_target} PUT names. "
+                "Expensive/no-contract names were excluded from the main slate instead of being forced."
+            )
         return [*calls, *puts], errors

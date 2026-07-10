@@ -12,7 +12,7 @@ from engine import SignalEngine
 
 
 ROOT = Path(__file__).parent
-APP_STATE_VERSION = 15
+APP_STATE_VERSION = 17
 CANDIDATE_SCHEMA_FIELDS = (
     "setup_status", "checklist", "darvas", "company", "catalyst",
     "setup_type", "a_plus_score", "reversal_watch", "extended_watch",
@@ -61,18 +61,19 @@ config = load_config()
 with st.sidebar:
     st.header("Risk controls")
     account = st.number_input("Account size ($)", 100, 100000, int(config["account_size"]), 50)
-    risk_pct = st.slider("Maximum premium risk per trade", 1, 20, int(config["max_risk_per_trade_pct"]), 1)
+    risk_pct = st.slider("Maximum option premium cap per trade", 1, 100, int(config["max_risk_per_trade_pct"]), 1)
     minimum_confidence = st.slider("Minimum trade confidence", 50, 90, int(config["minimum_confidence"]), 1)
     high_confidence_only = st.toggle(
         "Only show names at or above confidence target",
-        value=bool(config.get("high_confidence_only", True)),
+        value=bool(config.get("high_confidence_only", False)),
     )
+    st.caption("Leave this off when your priority is filling the 3 CALL + 3 PUT budget slate; turn it on for strict 80+ only.")
     automatic_discovery = st.toggle("Automatic market discovery", value=bool(config.get("automatic_discovery", True)))
     discovery_limit = st.slider("Stocks sent to full news analysis", 10, 30, int(config.get("discovery_limit", 20)), 5)
     move_discovery_limit = st.slider("CAG-style bounce/fade stocks analyzed", 5, 40, int(config.get("move_discovery_limit", 20)), 5)
     theme_discovery_limit = st.slider("Theme stocks fully analyzed", 7, 35, int(config.get("theme_discovery_limit", 10)), 1)
     broad_discovery_pool_size = st.slider("Broad pool pre-ranked", 100, 1000, int(config.get("broad_discovery_pool_size", 200)), 50)
-    max_symbols_to_analyze = st.slider("Max stocks fully analyzed per scan", 10, 60, int(config.get("max_symbols_to_analyze", 20)), 5)
+    max_symbols_to_analyze = st.slider("Max stocks fully analyzed per scan", 10, 80, int(config.get("max_symbols_to_analyze", 60)), 5)
     theme_options = list(config.get("theme_universes", {}).keys())
     enabled_themes = st.multiselect(
         "Theme lanes",
@@ -87,8 +88,10 @@ with st.sidebar:
     st.caption("A second news lane adds fresh earnings, FDA, guidance, contract, acquisition, partnership and analyst-action names before ranking.")
     st.caption("A third move-hunter lane adds stocks bouncing after a hard selloff, fading after a pop, or moving on high volume.")
     st.caption("Theme lanes are pre-ranked first, then the best names go into full news/options analysis so the scan finishes faster.")
+    if config.get("budget_qualified_main_list", True):
+        st.caption("Main slate requires an affordable contract; names like VERA are excluded if the option premium breaks the budget.")
     watchlist = st.text_area("Watchlist", ", ".join(config["watchlist"]))
-    st.warning("A small account should not target fixed daily income. One long option can lose its entire premium.")
+    st.warning("A small account should not target fixed daily income. One long option can lose its entire premium; a 100% cap means one contract can use the whole account.")
 
 config["account_size"] = account
 config["max_risk_per_trade_pct"] = risk_pct
@@ -110,7 +113,8 @@ maximum_stock_price = max(
 )
 st.info(
     f"Account-scaled universe: stocks from ${config['minimum_stock_price']:.0f} to ${maximum_stock_price:,.0f}. "
-    f"Current maximum premium risk: ${account * risk_pct / 100:,.0f} per contract."
+    f"Current maximum option premium cap: ${account * risk_pct / 100:,.0f} per contract. "
+    "The 6-stock slate only counts names with a contract inside that cap."
 )
 
 if st.button("Run market scan", type="primary", use_container_width=True):
@@ -207,32 +211,44 @@ if not candidate_schema_is_current(candidates):
     st.warning("Dave updated the app after your last scan, so I cleared the old cached results. Press **Run market scan** again to get fresh candidates.")
     st.stop()
 if not candidates:
-    if config.get("high_confidence_only", True):
+    if config.get("high_confidence_only", False):
         st.error(
             f"No candidate reached the {minimum_confidence}% confidence target with the current risk filters. "
-            "That is not broken — it means the scanner did not find a clean high-confidence setup yet. "
+            "That is not broken — it means the scanner did not find a clean high-confidence setup with an affordable option contract yet. "
             "You can raise Max stocks fully analyzed per scan, raise Broad pool pre-ranked, or turn off high-confidence-only to review study radar."
         )
     else:
         st.error("No candidate passed the evidence and risk filters. No trade is a valid result.")
 else:
-    if config.get("high_confidence_only", True):
+    if config.get("high_confidence_only", False):
         st.success(f"High-confidence mode is on: showing only names at or above {minimum_confidence}% confidence.")
-    st.subheader("Dave's 3-stock weekly study list")
-    st.caption("These are the best current study candidates from the scan, not a promise to trade. Confirm price, contract, news, and entry level in Robinhood.")
-    weekly = sorted(
+    call_count = sum(c.direction == "CALL" for c in candidates)
+    put_count = sum(c.direction == "PUT" for c in candidates)
+    st.subheader("Dave's budget-qualified 6-stock slate")
+    st.caption(
+        "Target is 3 CALL + 3 PUT for the $350 starting account. Every name here must have an option contract "
+        "inside the configured premium-risk cap. No expensive/no-contract names get forced into this slate."
+    )
+    if call_count < int(config.get("max_call_candidates", 3)) or put_count < int(config.get("max_put_candidates", 3)):
+        st.warning(
+            f"Budget slate is incomplete: {call_count}/3 CALL and {put_count}/3 PUT. "
+            "Dave will not fake extra picks when the contracts are too expensive or the evidence is weak."
+        )
+    slate = sorted(
         candidates,
         key=lambda c: (
+            c.direction == "CALL",
             c.advantage_profile["score"],
             c.setup_status == "TRADE SETUP",
             c.a_plus_score,
             c.confidence,
         ),
         reverse=True,
-    )[:3]
-    if weekly:
-        weekly_cols = st.columns(len(weekly))
-        for column, c in zip(weekly_cols, weekly):
+    )[:6]
+    if slate:
+        slate_cols = st.columns(3)
+        for index, c in enumerate(slate):
+            column = slate_cols[index % 3]
             with column:
                 st.markdown(f"#### {c.symbol} - {c.direction}")
                 st.write(f"**{c.setup_status}**")
@@ -240,19 +256,19 @@ else:
                 st.write(f"Edge: {c.advantage_profile['label']} ({c.advantage_profile['score']}/100)")
                 st.write(f"Theme: {', '.join(c.advantage_profile['themes']) or 'No theme'}")
                 st.write(f"Price: ${c.price:.2f}")
+                st.write(f"Premium: ${c.option['estimated_cost_and_max_loss']:.2f}")
+                st.write(f"Option tier: {c.option.get('quality_tier', 'standard')}")
                 st.write(f"Hold: {c.holding_plan['suggested_hold']}")
                 st.write(f"Move source: {c.move_quality['source_type']}")
-                st.write(f"Contract: {c.option['contract'] if c.option else 'None found'}")
+                st.write(f"Contract: {c.option['contract']}")
                 top_headline = c.headlines[0]["title"] if c.headlines else "No recent headline found"
                 st.caption(top_headline)
     else:
-        st.info("No weekly study candidates yet. Run a scan or loosen filters carefully.")
+        st.info("No budget-qualified slate candidates yet. Run a deeper scan or loosen filters carefully.")
 
-    call_count = sum(c.direction == "CALL" for c in candidates)
-    put_count = sum(c.direction == "PUT" for c in candidates)
     call_metric, put_metric = st.columns(2)
-    call_metric.metric("CALL radar", f"{call_count}/3")
-    put_metric.metric("PUT radar", f"{put_count}/3")
+    call_metric.metric("Budget CALL slate", f"{call_count}/3")
+    put_metric.metric("Budget PUT slate", f"{put_count}/3")
     summary = pd.DataFrame([{
         "Symbol": c.symbol,
         "Status": c.setup_status,
@@ -267,6 +283,7 @@ else:
         "Suggested hold": c.holding_plan["suggested_hold"],
         "Affordable contract": c.option["contract"] if c.option else "None found",
         "Premium / max loss": f"${c.option['estimated_cost_and_max_loss']:.2f}" if c.option else "—",
+        "Option tier": c.option.get("quality_tier", "—") if c.option else "—",
         "Earnings": c.earnings,
     } for c in candidates])
     st.dataframe(summary, hide_index=True, use_container_width=True)

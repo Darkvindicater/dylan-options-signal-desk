@@ -6,9 +6,12 @@
   "news_discovery_limit": 20,
   "move_discovery_limit": 20,
   "theme_discovery_limit": 10,
-  "broad_discovery_pool_size": 200,
-  "max_symbols_to_analyze": 20,
+  "broad_discovery_pool_size": 500,
+  "max_symbols_to_analyze": 45,
+  "stop_after_budget_slate_filled": true,
+  "budget_qualified_main_list": true,
   "priority_symbols": ["CAG", "LEVI", "VERA", "BROS"],
+  "budget_priority_symbols": ["SOFI", "HOOD", "PLTR", "F", "GM", "BAC", "WFC", "PFE", "SNAP", "RIVN", "LCID", "MARA", "DKNG", "WBD", "CAG", "LEVI", "HIMS", "AAL", "DAL", "UAL", "PYPL", "INTC", "NIO", "AFRM", "CCL", "RBLX"],
   "enabled_theme_universes": ["Restaurants", "Retail", "Healthcare", "AI", "Cars / EV", "Beauty", "Technology"],
   "theme_universes": {
     "Restaurants": ["BROS", "CMG", "CAVA", "SHAK", "WEN", "DRI", "EAT", "BLMN", "CAKE", "TXRH", "YUM", "YUMC", "QSR", "DPZ", "PZZA", "JACK", "DIN", "PTLO", "BJRI", "RRGB", "WING", "PLAY", "SBUX", "MCD", "SG"],
@@ -20,13 +23,13 @@
     "Technology": ["AAPL", "MSFT", "NVDA", "AMD", "AVGO", "ORCL", "CRM", "ADBE", "NOW", "SHOP", "UBER", "HOOD", "COIN", "PYPL", "XYZ", "INTC", "QCOM", "AMAT", "MU", "SNOW", "NET", "DDOG", "MDB", "PANW", "CRWD", "TSM", "ASML", "KLAC", "LRCX"]
   },
   "discovery_universe": ["SPY", "QQQ", "IWM", "DIA", "GLD", "SLV", "TLT", "XLF", "XLE", "XLK", "XLV", "XLI", "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA", "AMD", "AVGO", "MU", "INTC", "PLTR", "ORCL", "CRM", "ADBE", "NFLX", "QCOM", "AMAT", "ARM", "SMCI", "DELL", "CSCO", "IBM", "NOW", "SHOP", "UBER", "ABNB", "DASH", "COIN", "MARA", "HOOD", "AFRM", "PYPL", "XYZ", "SOFI", "BAC", "JPM", "WFC", "GS", "MS", "V", "MA", "AXP", "F", "GM", "RIVN", "LCID", "NIO", "AAL", "DAL", "UAL", "CCL", "RCL", "LUV", "SNAP", "PINS", "RBLX", "DKNG", "HIMS", "WBD", "DIS", "FOX", "PFE", "MRNA", "LLY", "UNH", "CVS", "ABBV", "XOM", "CVX", "OXY", "SLB", "BA", "CAT", "GE", "RTX", "WMT", "TGT", "COST", "NKE", "SBUX", "MCD", "KO", "PEP", "HD", "LOW", "BABA", "JD", "LI", "XPEV"],
-  "account_size": 250,
-  "max_risk_per_trade_pct": 10,
+  "account_size": 350,
+  "max_risk_per_trade_pct": 100,
   "max_candidates": 6,
   "max_call_candidates": 3,
   "max_put_candidates": 3,
   "minimum_confidence": 80,
-  "high_confidence_only": true,
+  "high_confidence_only": false,
   "minimum_stock_price": 10,
   "max_stock_price_per_account_dollar": 0.4,
   "minimum_average_volume": 500000,
@@ -35,10 +38,15 @@
   "option_days_min": 14,
   "option_days_max": 35
   ,"preferred_contract_min": 10
-  ,"preferred_contract_max": 35
+  ,"preferred_contract_max": 350
   ,"minimum_option_volume": 100
   ,"minimum_open_interest": 500
+  ,"budget_contract_fallback": true
+  ,"fallback_option_max_distance": 0.08
+  ,"fallback_option_max_spread_pct": 0.45
+  ,"fallback_minimum_option_volume": 10
+  ,"fallback_minimum_open_interest": 50
   ,"minimum_checklist_score": 8
   ,"small_account_contract_ideal_min": 10
-  ,"small_account_contract_ideal_max": 35
+  ,"small_account_contract_ideal_max": 350
 }
