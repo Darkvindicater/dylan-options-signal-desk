@@ -12,7 +12,7 @@ from engine import SignalEngine
 
 
 ROOT = Path(__file__).parent
-APP_STATE_VERSION = 12
+APP_STATE_VERSION = 13
 
 
 def load_config() -> dict:
@@ -99,6 +99,80 @@ if st.button("Run market scan", type="primary", use_container_width=True):
         st.session_state["errors"] = errors
         st.session_state["scan_time"] = datetime.now().astimezone().strftime("%Y-%m-%d %I:%M:%S %p %Z")
 
+st.divider()
+st.subheader("Type any stock for Dave's deep dive")
+st.caption("Use this for quality names like AAPL, BROS, CAVA, TSLA, NVDA, ULTA, HIMS, or any ticker you want to study.")
+with st.form("deep_dive_form"):
+    deep_symbol = st.text_input("Ticker", value=st.session_state.get("last_deep_symbol", "AAPL")).upper().strip()
+    deep_submit = st.form_submit_button("Analyze this stock", use_container_width=True)
+if deep_submit and deep_symbol:
+    with st.spinner(f"Building full deep dive for {deep_symbol}..."):
+        try:
+            st.session_state["deep_dive"] = SignalEngine(config).deep_dive(deep_symbol)
+            st.session_state["last_deep_symbol"] = deep_symbol
+            st.session_state.pop("deep_dive_error", None)
+        except Exception as exc:
+            st.session_state["deep_dive_error"] = f"{deep_symbol}: {exc}"
+            st.session_state.pop("deep_dive", None)
+
+if st.session_state.get("deep_dive_error"):
+    st.error(st.session_state["deep_dive_error"])
+
+if st.session_state.get("deep_dive"):
+    dive = st.session_state["deep_dive"]
+    st.markdown(f"### {dive['symbol']} deep dive - {dive['quality']['label']} ({dive['quality']['score']}/100)")
+    metric_cols = st.columns(5)
+    metric_cols[0].metric("Price", f"${dive['history']['latest_price']:.2f}")
+    metric_cols[1].metric("6mo return", f"{dive['history']['six_month_return_pct']:+.1f}%")
+    metric_cols[2].metric("20d return", f"{dive['history']['twenty_day_return_pct']:+.1f}%")
+    metric_cols[3].metric("Max drawdown", f"{dive['history']['max_drawdown_pct']:+.1f}%")
+    metric_cols[4].metric("Trend", dive["history"]["trend_label"])
+
+    history_frame = pd.DataFrame(dive["historical_rows"])
+    if not history_frame.empty:
+        line = go.Figure()
+        line.add_trace(go.Scatter(x=history_frame["date"], y=history_frame["close"], mode="lines", name="Close"))
+        line.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10), yaxis_title="Close")
+        st.plotly_chart(line, use_container_width=True)
+
+    tabs = st.tabs(["Summary", "News + community proxy", "Financials", "Historical data", "Earnings / press releases"])
+    with tabs[0]:
+        st.write(f"**{dive['profile']['name']}** - {dive['profile']['sector']} / {dive['profile']['industry']}")
+        st.write(f"**Themes:** {', '.join(dive['themes']) or 'No theme lane match'}")
+        st.write(dive["profile"]["business"] or "Business summary unavailable.")
+        col_up, col_down = st.columns(2)
+        with col_up:
+            st.markdown("**Why it could go up**")
+            for item in dive["bull_case"] or ["No clear bull case yet."]:
+                st.write(f"- {item}")
+        with col_down:
+            st.markdown("**What could go wrong**")
+            for item in dive["bear_case"] or ["No major warnings found yet."]:
+                st.write(f"- {item}")
+    with tabs[1]:
+        st.markdown("**Community/news proxy**")
+        st.caption("This uses recent headline tone and analyst data as a proxy. Verify Reddit/X/Stocktwits manually before trading.")
+        st.json(dive["news_summary"])
+        for headline in dive["headlines"][:8]:
+            mood = "positive" if headline["sentiment"] > .1 else "negative" if headline["sentiment"] < -.1 else "neutral"
+            st.markdown(f"- [{headline['title']}]({headline['link']}) - {mood}")
+            if headline.get("summary"):
+                st.caption(headline["summary"])
+    with tabs[2]:
+        st.markdown("**Financial snapshot**")
+        st.json(dive["financials"])
+        st.markdown("**Analyst snapshot**")
+        st.json(dive["analyst"])
+    with tabs[3]:
+        st.dataframe(history_frame.sort_values("date", ascending=False), hide_index=True, use_container_width=True)
+    with tabs[4]:
+        st.metric("Next earnings date", dive["earnings"])
+        if dive["press_release_headlines"]:
+            for headline in dive["press_release_headlines"][:6]:
+                st.markdown(f"- [{headline['title']}]({headline['link']})")
+        else:
+            st.info("No recent earnings-call or press-release style headline found in the news feed.")
+
 if "candidates" not in st.session_state:
     st.info("Press **Run market scan**. The model may return no trade when signals are weak or contracts exceed your risk cap.")
     st.stop()
@@ -108,6 +182,35 @@ candidates = st.session_state["candidates"]
 if not candidates:
     st.error("No candidate passed the evidence and risk filters. No trade is a valid result.")
 else:
+    st.subheader("Dave's 3-stock weekly study list")
+    st.caption("These are the best current study candidates from the scan, not a promise to trade. Confirm price, contract, news, and entry level in Robinhood.")
+    weekly = sorted(
+        candidates,
+        key=lambda c: (
+            c.advantage_profile["score"],
+            c.setup_status == "TRADE SETUP",
+            c.a_plus_score,
+            c.confidence,
+        ),
+        reverse=True,
+    )[:3]
+    if weekly:
+        weekly_cols = st.columns(len(weekly))
+        for column, c in zip(weekly_cols, weekly):
+            with column:
+                st.markdown(f"#### {c.symbol} - {c.direction}")
+                st.write(f"**{c.setup_status}**")
+                st.write(f"Edge: {c.advantage_profile['label']} ({c.advantage_profile['score']}/100)")
+                st.write(f"Theme: {', '.join(c.advantage_profile['themes']) or 'No theme'}")
+                st.write(f"Price: ${c.price:.2f}")
+                st.write(f"Hold: {c.holding_plan['suggested_hold']}")
+                st.write(f"Move source: {c.move_quality['source_type']}")
+                st.write(f"Contract: {c.option['contract'] if c.option else 'None found'}")
+                top_headline = c.headlines[0]["title"] if c.headlines else "No recent headline found"
+                st.caption(top_headline)
+    else:
+        st.info("No weekly study candidates yet. Run a scan or loosen filters carefully.")
+
     call_count = sum(c.direction == "CALL" for c in candidates)
     put_count = sum(c.direction == "PUT" for c in candidates)
     call_metric, put_metric = st.columns(2)

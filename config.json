@@ -6,9 +6,15 @@
   "news_discovery_limit": 20,
   "move_discovery_limit": 20,
   "priority_symbols": ["CAG", "LEVI", "VERA"],
-  "enabled_theme_universes": ["Restaurants"],
+  "enabled_theme_universes": ["Restaurants", "Retail", "Healthcare", "AI", "Cars / EV", "Beauty", "Technology"],
   "theme_universes": {
-    "Restaurants": ["BROS", "CMG", "CAVA", "SHAK", "WEN", "DRI", "EAT", "BLMN", "CAKE", "TXRH", "YUM", "YUMC", "QSR", "DPZ", "PZZA", "JACK", "DIN", "PTLO", "BJRI", "RRGB", "WING", "PLAY", "SBUX", "MCD", "SG"]
+    "Restaurants": ["BROS", "CMG", "CAVA", "SHAK", "WEN", "DRI", "EAT", "BLMN", "CAKE", "TXRH", "YUM", "YUMC", "QSR", "DPZ", "PZZA", "JACK", "DIN", "PTLO", "BJRI", "RRGB", "WING", "PLAY", "SBUX", "MCD", "SG"],
+    "Retail": ["AMZN", "WMT", "TGT", "COST", "HD", "LOW", "NKE", "LULU", "TJX", "ROST", "BBY", "DG", "DLTR", "FIVE", "BURL", "ETSY", "CHWY", "BOOT", "FL", "DECK", "ONON", "KSS", "M", "GPS", "LEVI"],
+    "Healthcare": ["UNH", "LLY", "NVO", "MRK", "PFE", "ABBV", "AMGN", "GILD", "TMO", "ISRG", "MDT", "BSX", "CVS", "HIMS", "VRTX", "REGN", "MRNA", "BMY", "JNJ", "ABT", "CI", "ELV", "HCA", "DXCM", "PODD"],
+    "AI": ["NVDA", "AMD", "PLTR", "AVGO", "ARM", "SMCI", "SOUN", "AI", "PATH", "BBAI", "TEM", "CRWV", "ORCL", "MSFT", "GOOGL", "AMZN", "META", "TSM", "QCOM", "MU", "DELL", "IBM"],
+    "Cars / EV": ["TSLA", "GM", "F", "RIVN", "LCID", "NIO", "LI", "XPEV", "TM", "HMC", "RACE", "MBLY", "APTV", "BWA", "ALV", "STLA", "VFS"],
+    "Beauty": ["ULTA", "ELF", "COTY", "EL", "ODD", "LRLCY", "IPAR", "SBH", "WOOF", "PG", "KVUE", "NUS", "MED", "REV"],
+    "Technology": ["AAPL", "MSFT", "NVDA", "AMD", "AVGO", "ORCL", "CRM", "ADBE", "NOW", "SHOP", "UBER", "HOOD", "COIN", "PYPL", "XYZ", "INTC", "QCOM", "AMAT", "MU", "SNOW", "NET", "DDOG", "MDB", "PANW", "CRWD", "TSM", "ASML", "KLAC", "LRCX"]
   },
   "discovery_universe": ["SPY", "QQQ", "IWM", "DIA", "GLD", "SLV", "TLT", "XLF", "XLE", "XLK", "XLV", "XLI", "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA", "AMD", "AVGO", "MU", "INTC", "PLTR", "ORCL", "CRM", "ADBE", "NFLX", "QCOM", "AMAT", "ARM", "SMCI", "DELL", "CSCO", "IBM", "NOW", "SHOP", "UBER", "ABNB", "DASH", "COIN", "MARA", "HOOD", "AFRM", "PYPL", "XYZ", "SOFI", "BAC", "JPM", "WFC", "GS", "MS", "V", "MA", "AXP", "F", "GM", "RIVN", "LCID", "NIO", "AAL", "DAL", "UAL", "CCL", "RCL", "LUV", "SNAP", "PINS", "RBLX", "DKNG", "HIMS", "WBD", "DIS", "FOX", "PFE", "MRNA", "LLY", "UNH", "CVS", "ABBV", "XOM", "CVX", "OXY", "SLB", "BA", "CAT", "GE", "RTX", "WMT", "TGT", "COST", "NKE", "SBUX", "MCD", "KO", "PEP", "HD", "LOW", "BABA", "JD", "LI", "XPEV"],
   "account_size": 250,

@@ -440,6 +440,249 @@ class SignalEngine:
             "annualized_volatility": float(atr_proxy),
         }
 
+    @staticmethod
+    def historical_profile(frame: pd.DataFrame) -> dict[str, Any]:
+        close = SignalEngine._series(frame, "Close")
+        volume = SignalEngine._series(frame, "Volume")
+        if len(close) < 2:
+            raise ValueError("Not enough history for deep dive")
+        returns = close.pct_change().dropna()
+        latest = float(close.iloc[-1])
+        first = float(close.iloc[0])
+        high = float(close.max())
+        low = float(close.min())
+        sma20 = float(close.rolling(20).mean().iloc[-1]) if len(close) >= 20 else latest
+        sma50 = float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else latest
+        six_month_return = latest / first - 1
+        return_20d = float(close.pct_change(20).iloc[-1]) if len(close) >= 21 else 0.0
+        return_5d = float(close.pct_change(5).iloc[-1]) if len(close) >= 6 else 0.0
+        drawdown = float((close / close.cummax() - 1).min())
+        distance_from_high = latest / high - 1 if high else 0.0
+        recovery_from_low = latest / low - 1 if low else 0.0
+        avg_volume = float(volume.tail(30).mean()) if len(volume) else 0.0
+        volatility = float(returns.tail(60).std() * math.sqrt(252)) if len(returns) else 0.0
+
+        if six_month_return >= .15 and latest > sma50 and return_20d >= 0:
+            trend_label = "Quality uptrend"
+        elif drawdown <= -.15 and return_20d > .03 and latest > sma20:
+            trend_label = "Comeback after selloff"
+        elif latest < sma50 and return_20d < 0:
+            trend_label = "Downtrend / avoid calls until reclaim"
+        elif abs(distance_from_high) <= .04 and latest > sma50:
+            trend_label = "Near highs / continuation watch"
+        else:
+            trend_label = "Base / mixed trend"
+
+        return {
+            "trend_label": trend_label,
+            "latest_price": round(latest, 2),
+            "six_month_return_pct": round(six_month_return * 100, 2),
+            "twenty_day_return_pct": round(return_20d * 100, 2),
+            "five_day_return_pct": round(return_5d * 100, 2),
+            "six_month_high": round(high, 2),
+            "six_month_low": round(low, 2),
+            "distance_from_high_pct": round(distance_from_high * 100, 2),
+            "recovery_from_low_pct": round(recovery_from_low * 100, 2),
+            "max_drawdown_pct": round(drawdown * 100, 2),
+            "sma20": round(sma20, 2),
+            "sma50": round(sma50, 2),
+            "above_sma20": latest > sma20,
+            "above_sma50": latest > sma50,
+            "avg_volume_30d": int(avg_volume),
+            "annualized_volatility_pct": round(volatility * 100, 2),
+        }
+
+    @staticmethod
+    def quality_score(info: dict[str, Any], history: dict[str, Any], news_summary: dict[str, Any]) -> dict[str, Any]:
+        score = 0
+        positives: list[str] = []
+        warnings: list[str] = []
+        market_cap = info.get("marketCap") or 0
+        revenue_growth = info.get("revenueGrowth")
+        earnings_growth = info.get("earningsGrowth")
+        profit_margin = info.get("profitMargins")
+        gross_margin = info.get("grossMargins")
+        debt_to_equity = info.get("debtToEquity")
+        target_mean = info.get("targetMeanPrice")
+        current = history["latest_price"]
+
+        if market_cap >= 10_000_000_000:
+            score += 15
+            positives.append("Large-cap / established-company quality filter passed.")
+        elif market_cap >= 2_000_000_000:
+            score += 8
+            positives.append("Mid-cap quality filter passed.")
+        else:
+            warnings.append("Smaller company; moves can be more volatile and news-sensitive.")
+
+        if history["avg_volume_30d"] >= 1_000_000:
+            score += 10
+            positives.append("Average volume is strong enough for cleaner entries/exits.")
+        else:
+            warnings.append("Average volume is thin; spreads and slippage can hurt.")
+
+        if revenue_growth is not None and revenue_growth > 0:
+            score += 10
+            positives.append(f"Revenue growth is positive at {revenue_growth:.1%}.")
+        elif revenue_growth is not None:
+            warnings.append(f"Revenue growth is negative at {revenue_growth:.1%}.")
+
+        if earnings_growth is not None and earnings_growth > 0:
+            score += 8
+            positives.append(f"Earnings growth is positive at {earnings_growth:.1%}.")
+        elif earnings_growth is not None:
+            warnings.append(f"Earnings growth is negative at {earnings_growth:.1%}.")
+
+        if profit_margin is not None and profit_margin > 0:
+            score += 8
+            positives.append(f"Profit margin is positive at {profit_margin:.1%}.")
+        elif profit_margin is not None:
+            warnings.append(f"Profit margin is negative at {profit_margin:.1%}.")
+
+        if gross_margin is not None and gross_margin > .25:
+            score += 6
+            positives.append(f"Gross margin is healthy at {gross_margin:.1%}.")
+
+        if debt_to_equity is not None and debt_to_equity < 150:
+            score += 5
+            positives.append("Debt/equity is not extreme.")
+        elif debt_to_equity is not None:
+            warnings.append(f"Debt/equity is elevated at {debt_to_equity:.1f}.")
+
+        if history["above_sma50"]:
+            score += 8
+            positives.append("Price is above the 50-day trend line.")
+        else:
+            warnings.append("Price is below the 50-day trend line.")
+
+        if history["trend_label"] in {"Comeback after selloff", "Quality uptrend"}:
+            score += 10
+            positives.append(f"Six-month chart profile: {history['trend_label']}.")
+        elif "Downtrend" in history["trend_label"]:
+            warnings.append("Six-month chart is still in a downtrend.")
+
+        if target_mean and current and target_mean > current * 1.08:
+            score += 8
+            positives.append(f"Analyst mean target implies upside to about ${target_mean:.2f}.")
+        elif target_mean and current and target_mean < current:
+            warnings.append(f"Analyst mean target is below the current price at about ${target_mean:.2f}.")
+
+        if news_summary["average_sentiment"] > .1:
+            score += 5
+            positives.append("Recent headline tone is positive.")
+        elif news_summary["average_sentiment"] < -.1:
+            warnings.append("Recent headline tone is negative.")
+
+        score = max(0, min(100, int(score)))
+        label = "QUALITY COMEBACK WATCH" if score >= 75 and history["trend_label"] == "Comeback after selloff" else (
+            "QUALITY LEADER" if score >= 75 else "QUALITY WATCH" if score >= 55 else "LOW QUALITY / WAIT"
+        )
+        return {"label": label, "score": score, "positives": positives, "warnings": warnings}
+
+    @staticmethod
+    def headline_summary(headlines: list[dict[str, Any]]) -> dict[str, Any]:
+        sentiments = [float(headline.get("sentiment", 0)) for headline in headlines]
+        average = float(np.mean(sentiments)) if sentiments else 0.0
+        positive = sum(value > .1 for value in sentiments)
+        negative = sum(value < -.1 for value in sentiments)
+        neutral = len(sentiments) - positive - negative
+        mood = "positive" if average > .1 else "negative" if average < -.1 else "mixed/neutral"
+        return {
+            "mood": mood,
+            "average_sentiment": round(average, 3),
+            "positive_headlines": positive,
+            "neutral_headlines": neutral,
+            "negative_headlines": negative,
+            "headline_count": len(headlines),
+            "buzz_level": "high" if len(headlines) >= 8 else "normal" if len(headlines) >= 3 else "low",
+        }
+
+    def deep_dive(self, symbol: str) -> dict[str, Any]:
+        symbol = symbol.upper().strip()
+        frame = yf.download(symbol, period="6mo", interval="1d", auto_adjust=True, progress=False)
+        if frame.empty or len(frame.dropna(how="all")) < 25:
+            raise ValueError("Not enough 6-month history for this ticker")
+        ticker = yf.Ticker(symbol)
+        try:
+            info = ticker.info
+        except Exception:
+            info = {}
+        company = self.company_check(symbol)
+        history = self.historical_profile(frame)
+        headlines = self.news(symbol, company["name"], limit=12)
+        news_summary = self.headline_summary(headlines)
+        quality = self.quality_score(info, history, news_summary)
+        earnings = self.earnings_date(symbol)
+        catalyst_exists, catalyst = self.catalyst_check(headlines)
+
+        financials = {
+            "market_cap": info.get("marketCap"),
+            "enterprise_value": info.get("enterpriseValue"),
+            "trailing_pe": info.get("trailingPE"),
+            "forward_pe": info.get("forwardPE"),
+            "price_to_sales": info.get("priceToSalesTrailing12Months"),
+            "revenue_growth": info.get("revenueGrowth"),
+            "earnings_growth": info.get("earningsGrowth"),
+            "gross_margin": info.get("grossMargins"),
+            "profit_margin": info.get("profitMargins"),
+            "debt_to_equity": info.get("debtToEquity"),
+            "free_cash_flow": info.get("freeCashflow"),
+            "total_cash": info.get("totalCash"),
+            "total_debt": info.get("totalDebt"),
+        }
+        analyst = {
+            "recommendation": info.get("recommendationKey"),
+            "recommendation_mean": info.get("recommendationMean"),
+            "analyst_count": info.get("numberOfAnalystOpinions"),
+            "target_low": info.get("targetLowPrice"),
+            "target_mean": info.get("targetMeanPrice"),
+            "target_high": info.get("targetHighPrice"),
+        }
+
+        bull_case = list(quality["positives"])
+        bear_case = list(quality["warnings"])
+        if catalyst_exists:
+            bull_case.append(f"Named catalyst found: {catalyst}.")
+        else:
+            bear_case.append("No fresh named catalyst detected in recent headlines.")
+        if history["distance_from_high_pct"] <= -12 and history["above_sma20"]:
+            bull_case.append("Stock is still below its six-month high but has started to recover above short-term trend.")
+        if earnings != "Not available" and earnings != "No upcoming date found":
+            bear_case.append(f"Earnings date/watch item: {earnings}; avoid surprise risk unless planned.")
+
+        historical_rows = []
+        close = self._series(frame, "Close")
+        volume = self._series(frame, "Volume")
+        for date, close_value in close.tail(30).items():
+            historical_rows.append({
+                "date": pd.Timestamp(date).strftime("%Y-%m-%d"),
+                "close": round(float(close_value), 2),
+                "volume": int(volume.loc[date]) if date in volume.index and pd.notna(volume.loc[date]) else None,
+            })
+
+        press_release_terms = ("earnings", "results", "guidance", "conference call", "press release", "investor")
+        press_release_headlines = [
+            headline for headline in headlines
+            if any(term in str(headline.get("title", "")).lower() for term in press_release_terms)
+        ]
+
+        return {
+            "symbol": symbol,
+            "themes": self.symbol_themes(symbol),
+            "profile": company,
+            "history": history,
+            "financials": financials,
+            "analyst": analyst,
+            "news_summary": news_summary,
+            "headlines": headlines,
+            "press_release_headlines": press_release_headlines,
+            "earnings": earnings,
+            "quality": quality,
+            "bull_case": bull_case[:8],
+            "bear_case": bear_case[:8],
+            "historical_rows": historical_rows,
+        }
+
     def earnings_date(self, symbol: str) -> str:
         try:
             dates = yf.Ticker(symbol).get_earnings_dates(limit=4)

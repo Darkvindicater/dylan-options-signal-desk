@@ -148,6 +148,19 @@ class EngineTests(unittest.TestCase):
         self.assertGreaterEqual(profile["score"], 80)
         self.assertEqual(profile["label"], "SMALL ACCOUNT EDGE")
 
+    def test_historical_profile_detects_comeback_after_selloff(self):
+        prices = pd.Series(
+            [100, 95, 90, 85, 80, 78, 76, 74, 73, 72, 74, 76, 78, 80, 82, 84, 86, 88, 90, 92,
+             94, 96, 98, 100, 102, 104, 106, 108, 110, 112, 114, 116, 118, 120, 122, 124,
+             126, 128, 130, 132, 134, 136, 138, 140, 142, 144, 146, 148, 150, 152,
+             154, 156, 158, 160, 162, 164, 166, 168, 170, 172],
+            dtype=float,
+        )
+        frame = pd.DataFrame({"Close": prices, "Volume": [2_000_000] * len(prices)})
+        profile = SignalEngine.historical_profile(frame)
+        self.assertIn(profile["trend_label"], {"Comeback after selloff", "Quality uptrend"})
+        self.assertGreater(profile["six_month_return_pct"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
