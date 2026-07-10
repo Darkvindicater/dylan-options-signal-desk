@@ -51,6 +51,12 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(engine.stock_price_fits_account(150))
         self.assertFalse(engine.stock_price_fits_account(250))
 
+    def test_grind_account_uses_lower_stock_price_ceiling(self):
+        engine = SignalEngine({"account_size": 300, "minimum_stock_price": 5, "max_stock_price_per_account_dollar": .25})
+        self.assertEqual(engine.maximum_stock_price(), 75)
+        self.assertTrue(engine.stock_price_fits_account(50))
+        self.assertFalse(engine.stock_price_fits_account(100))
+
     def test_acquisition_explanation_mentions_dilution(self):
         explanation = SignalEngine.explain_catalyst("Acquisition catalyst: Company to acquire target")
         self.assertIn("dilution", explanation)

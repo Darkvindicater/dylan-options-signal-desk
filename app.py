@@ -12,7 +12,7 @@ from engine import SignalEngine
 
 
 ROOT = Path(__file__).parent
-APP_STATE_VERSION = 17
+APP_STATE_VERSION = 18
 CANDIDATE_SCHEMA_FIELDS = (
     "setup_status", "checklist", "darvas", "company", "catalyst",
     "setup_type", "a_plus_score", "reversal_watch", "extended_watch",
@@ -60,8 +60,14 @@ st.caption("Balanced radar: up to 3 CALL names and 3 PUT names. The app never ch
 config = load_config()
 with st.sidebar:
     st.header("Risk controls")
-    account = st.number_input("Account size ($)", 100, 100000, int(config["account_size"]), 50)
-    risk_pct = st.slider("Maximum option premium cap per trade", 1, 100, int(config["max_risk_per_trade_pct"]), 1)
+    grind_mode = st.toggle("Small-account grind mode", value=bool(config.get("small_account_grind_mode", True)))
+    account = st.number_input("Account size ($)", 100, 100000, int(config["account_size"]), 50, key="account_size_v18")
+    account_goal = st.number_input("Account goal ($)", 300, 100000, int(config.get("account_goal", 1000)), 50, key="account_goal_v18")
+    risk_pct = st.slider("Maximum contract cap (% of account)", 1, 100, int(config["max_risk_per_trade_pct"]), 1, key="premium_cap_v18")
+    st.caption(
+        "Grind mode is built for low-priced stocks and contracts that fit the account. "
+        "A smaller cap gives more survival; a bigger cap gives more risk."
+    )
     minimum_confidence = st.slider("Minimum trade confidence", 50, 90, int(config["minimum_confidence"]), 1)
     high_confidence_only = st.toggle(
         "Only show names at or above confidence target",
@@ -91,10 +97,18 @@ with st.sidebar:
     if config.get("budget_qualified_main_list", True):
         st.caption("Main slate requires an affordable contract; names like VERA are excluded if the option premium breaks the budget.")
     watchlist = st.text_area("Watchlist", ", ".join(config["watchlist"]))
-    st.warning("A small account should not target fixed daily income. One long option can lose its entire premium; a 100% cap means one contract can use the whole account.")
+    st.warning("A small account should not target fixed daily income. One long option can lose its entire premium. Grind mode favors survival over one-shot all-in contracts.")
 
+config["small_account_grind_mode"] = grind_mode
 config["account_size"] = account
+config["account_goal"] = account_goal
 config["max_risk_per_trade_pct"] = risk_pct
+if grind_mode:
+    config["minimum_stock_price"] = 5
+    config["max_stock_price_per_account_dollar"] = 0.25
+else:
+    config["minimum_stock_price"] = 10
+    config["max_stock_price_per_account_dollar"] = 0.4
 config["minimum_confidence"] = minimum_confidence
 config["high_confidence_only"] = high_confidence_only
 if high_confidence_only:
@@ -112,8 +126,9 @@ maximum_stock_price = max(
     float(account) * float(config.get("max_stock_price_per_account_dollar", .4)),
 )
 st.info(
-    f"Account-scaled universe: stocks from ${config['minimum_stock_price']:.0f} to ${maximum_stock_price:,.0f}. "
-    f"Current maximum option premium cap: ${account * risk_pct / 100:,.0f} per contract. "
+    f"Grind path: USD {account:,.0f} to USD {account_goal:,.0f}. "
+    f"Low-stock universe: USD {config['minimum_stock_price']:.0f} to USD {maximum_stock_price:,.0f}. "
+    f"Current maximum option premium cap: USD {account * risk_pct / 100:,.0f} per contract. "
     "The 6-stock slate only counts names with a contract inside that cap."
 )
 
@@ -226,7 +241,7 @@ else:
     put_count = sum(c.direction == "PUT" for c in candidates)
     st.subheader("Dave's budget-qualified 6-stock slate")
     st.caption(
-        "Target is 3 CALL + 3 PUT for the $350 starting account. Every name here must have an option contract "
+        f"Target is 3 CALL + 3 PUT for the USD {account:,.0f} grind account. Every name here must have an option contract "
         "inside the configured premium-risk cap. No expensive/no-contract names get forced into this slate."
     )
     if call_count < int(config.get("max_call_candidates", 3)) or put_count < int(config.get("max_put_candidates", 3)):
