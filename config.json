@@ -6,9 +6,13 @@
   "news_discovery_limit": 20,
   "move_discovery_limit": 20,
   "priority_symbols": ["CAG", "LEVI", "VERA"],
+  "enabled_theme_universes": ["Restaurants"],
+  "theme_universes": {
+    "Restaurants": ["BROS", "CMG", "CAVA", "SHAK", "WEN", "DRI", "EAT", "BLMN", "CAKE", "TXRH", "YUM", "YUMC", "QSR", "DPZ", "PZZA", "JACK", "DIN", "PTLO", "BJRI", "RRGB", "WING", "PLAY", "SBUX", "MCD", "SG"]
+  },
   "discovery_universe": ["SPY", "QQQ", "IWM", "DIA", "GLD", "SLV", "TLT", "XLF", "XLE", "XLK", "XLV", "XLI", "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA", "AMD", "AVGO", "MU", "INTC", "PLTR", "ORCL", "CRM", "ADBE", "NFLX", "QCOM", "AMAT", "ARM", "SMCI", "DELL", "CSCO", "IBM", "NOW", "SHOP", "UBER", "ABNB", "DASH", "COIN", "MARA", "HOOD", "AFRM", "PYPL", "XYZ", "SOFI", "BAC", "JPM", "WFC", "GS", "MS", "V", "MA", "AXP", "F", "GM", "RIVN", "LCID", "NIO", "AAL", "DAL", "UAL", "CCL", "RCL", "LUV", "SNAP", "PINS", "RBLX", "DKNG", "HIMS", "WBD", "DIS", "FOX", "PFE", "MRNA", "LLY", "UNH", "CVS", "ABBV", "XOM", "CVX", "OXY", "SLB", "BA", "CAT", "GE", "RTX", "WMT", "TGT", "COST", "NKE", "SBUX", "MCD", "KO", "PEP", "HD", "LOW", "BABA", "JD", "LI", "XPEV"],
-  "account_size": 500,
-  "max_risk_per_trade_pct": 8,
+  "account_size": 250,
+  "max_risk_per_trade_pct": 10,
   "max_candidates": 6,
   "max_call_candidates": 3,
   "max_put_candidates": 3,
@@ -19,9 +23,11 @@
   "minimum_average_dollar_volume": 5000000,
   "option_days_min": 14,
   "option_days_max": 35
-  ,"preferred_contract_min": 15
-  ,"preferred_contract_max": 50
+  ,"preferred_contract_min": 10
+  ,"preferred_contract_max": 35
   ,"minimum_option_volume": 100
   ,"minimum_open_interest": 500
   ,"minimum_checklist_score": 8
+  ,"small_account_contract_ideal_min": 10
+  ,"small_account_contract_ideal_max": 35
 }

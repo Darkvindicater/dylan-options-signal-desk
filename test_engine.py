@@ -103,6 +103,51 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(signal["pattern"], "failed_bounce")
         self.assertGreater(signal["score"], 0)
 
+    def test_restaurant_theme_symbols_are_enabled(self):
+        engine = SignalEngine({
+            "theme_universes": {"Restaurants": ["BROS", "CMG"]},
+            "enabled_theme_universes": ["Restaurants"],
+        })
+        self.assertEqual(engine.theme_universe_symbols(), ["BROS", "CMG"])
+        self.assertEqual(engine.symbol_themes("BROS"), ["Restaurants"])
+
+    def test_small_account_advantage_rewards_affordable_liquid_contract(self):
+        engine = SignalEngine({
+            "account_size": 250,
+            "max_risk_per_trade_pct": 10,
+            "minimum_stock_price": 10,
+            "max_stock_price_per_account_dollar": .4,
+            "minimum_average_volume": 500000,
+            "minimum_average_dollar_volume": 5000000,
+            "minimum_option_volume": 100,
+            "minimum_open_interest": 500,
+            "option_days_min": 14,
+            "option_days_max": 35,
+            "small_account_contract_ideal_min": 10,
+            "small_account_contract_ideal_max": 35,
+            "theme_universes": {"Restaurants": ["BROS"]},
+            "enabled_theme_universes": ["Restaurants"],
+        })
+        profile = engine.advantage_profile(
+            "BROS",
+            {"price": 55, "avg_volume": 2_000_000},
+            {
+                "estimated_cost_and_max_loss": 20,
+                "spread_pct": 12,
+                "volume": 500,
+                "open_interest": 1200,
+                "days_to_expiry": 21,
+            },
+            {"actionable_catalyst": True, "source_type": "News + volume confirmed", "label": "Real catalyst"},
+            {"Clean Darvas box / base / structure": True, "Exact pivotal point": True},
+            {"breakout_confirmed": True, "volume_confirmed": True},
+            "TRADE SETUP",
+            True,
+            False,
+        )
+        self.assertGreaterEqual(profile["score"], 80)
+        self.assertEqual(profile["label"], "SMALL ACCOUNT EDGE")
+
 
 if __name__ == "__main__":
     unittest.main()

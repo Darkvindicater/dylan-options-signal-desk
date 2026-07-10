@@ -12,7 +12,7 @@ from engine import SignalEngine
 
 
 ROOT = Path(__file__).parent
-APP_STATE_VERSION = 11
+APP_STATE_VERSION = 12
 
 
 def load_config() -> dict:
@@ -27,7 +27,7 @@ saved_candidates = st.session_state.get("candidates", [])
 candidate_schema_is_current = all(
     hasattr(candidate, field)
     for candidate in saved_candidates
-    for field in ("setup_status", "checklist", "darvas", "company", "catalyst", "setup_type", "a_plus_score", "reversal_watch", "extended_watch", "catalyst_analysis", "holding_plan", "move_quality")
+    for field in ("setup_status", "checklist", "darvas", "company", "catalyst", "setup_type", "a_plus_score", "reversal_watch", "extended_watch", "catalyst_analysis", "holding_plan", "move_quality", "advantage_profile")
 )
 if (
     st.session_state.get("app_state_version") != APP_STATE_VERSION
@@ -46,6 +46,7 @@ st.caption("EXTENDED WATCH means momentum remains intact but chasing is blocked 
 st.caption("Hold clock: TRADE SETUP ideas default to 3-5 trading days, shortened near earnings, expiration, or failed structure.")
 st.caption("Move source check: separates real news + volume moves from relief bounces, pre-earnings positioning, and index/rebalance flow.")
 st.caption("CAG-style move hunter: looks for two-day bounce/fade patterns, then waits for hold or rejection confirmation.")
+st.caption("Small-account edge: favors affordable liquid contracts, clean levels, and theme names like Restaurants.")
 st.caption("Balanced radar: up to 3 CALL names and 3 PUT names. The app never changes direction merely to fill a quota.")
 
 config = load_config()
@@ -57,14 +58,21 @@ with st.sidebar:
     automatic_discovery = st.toggle("Automatic market discovery", value=bool(config.get("automatic_discovery", True)))
     discovery_limit = st.slider("Stocks sent to full news analysis", 10, 30, int(config.get("discovery_limit", 20)), 5)
     move_discovery_limit = st.slider("CAG-style bounce/fade stocks analyzed", 5, 40, int(config.get("move_discovery_limit", 20)), 5)
+    theme_options = list(config.get("theme_universes", {}).keys())
+    enabled_themes = st.multiselect(
+        "Theme lanes",
+        theme_options,
+        default=[theme for theme in config.get("enabled_theme_universes", []) if theme in theme_options],
+    )
     st.caption(
         f"Discovery keeps {len(config.get('discovery_universe', []))} core symbols and adds the live top "
         f"{config.get('top_market_universe_size', 0):,} U.S.-listed stocks, then fully analyzes the strongest movers."
     )
     st.caption("A second news lane adds fresh earnings, FDA, guidance, contract, acquisition, partnership and analyst-action names before ranking.")
     st.caption("A third move-hunter lane adds stocks bouncing after a hard selloff, fading after a pop, or moving on high volume.")
+    st.caption("Theme lanes force groups like Restaurants into the scan before the broad-market ranking runs.")
     watchlist = st.text_area("Watchlist", ", ".join(config["watchlist"]))
-    st.warning("A $500 account should not target fixed daily income. One long option can lose its entire premium.")
+    st.warning("A small account should not target fixed daily income. One long option can lose its entire premium.")
 
 config["account_size"] = account
 config["max_risk_per_trade_pct"] = risk_pct
@@ -72,6 +80,7 @@ config["minimum_confidence"] = minimum_confidence
 config["automatic_discovery"] = automatic_discovery
 config["discovery_limit"] = discovery_limit
 config["move_discovery_limit"] = move_discovery_limit
+config["enabled_theme_universes"] = enabled_themes
 config["watchlist"] = [s.strip().upper() for s in watchlist.split(",") if s.strip()]
 maximum_stock_price = max(
     float(config["minimum_stock_price"]),
@@ -112,6 +121,8 @@ else:
         "A+ score": f"{c.a_plus_score}/100",
         "Confidence*": f"{c.confidence}%",
         "Stock price": f"${c.price:.2f}",
+        "Theme": ", ".join(c.advantage_profile["themes"]) or "—",
+        "Small-account edge": f"{c.advantage_profile['label']} ({c.advantage_profile['score']}/100)",
         "Move source": c.move_quality["source_type"],
         "Suggested hold": c.holding_plan["suggested_hold"],
         "Affordable contract": c.option["contract"] if c.option else "None found",
@@ -142,6 +153,20 @@ else:
                     st.write(f"- {item}")
                 st.markdown("Verify before entry:")
                 for item in c.move_quality["verify"]:
+                    st.write(f"- {item}")
+                st.markdown("**Small-account advantage**")
+                st.write(f"{c.advantage_profile['label']} — {c.advantage_profile['score']}/100")
+                st.json({
+                    "themes": c.advantage_profile["themes"],
+                    "max premium risk": c.advantage_profile["max_premium_risk"],
+                    "ideal contract cost": c.advantage_profile["ideal_contract_cost"],
+                    "contract cost": c.advantage_profile["contract_cost"],
+                })
+                st.markdown("Edge positives:")
+                for item in c.advantage_profile["positives"] or ["No small-account advantages detected yet."]:
+                    st.write(f"- {item}")
+                st.markdown("Edge warnings:")
+                for item in c.advantage_profile["warnings"] or ["No major small-account warnings detected."]:
                     st.write(f"- {item}")
                 fundamentals = {
                     "Revenue growth": c.company["revenue_growth"],

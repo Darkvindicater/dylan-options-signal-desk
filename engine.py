@@ -46,6 +46,7 @@ class Candidate:
     catalyst_analysis: str
     holding_plan: dict[str, Any]
     move_quality: dict[str, Any]
+    advantage_profile: dict[str, Any]
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -59,6 +60,19 @@ class SignalEngine:
         self.sentiment = SentimentIntensityAnalyzer()
         self._market_cache: dict[str, Any] | None = None
         self._nasdaq_rows: list[dict[str, Any]] = []
+
+    def theme_universe_symbols(self) -> list[str]:
+        themes = self.config.get("theme_universes", {})
+        enabled = self.config.get("enabled_theme_universes", [])
+        symbols: list[str] = []
+        for theme in enabled:
+            symbols.extend(themes.get(theme, []))
+        return list(dict.fromkeys(symbol.upper().strip() for symbol in symbols if symbol))
+
+    def symbol_themes(self, symbol: str) -> list[str]:
+        themes = self.config.get("theme_universes", {})
+        symbol = symbol.upper().strip()
+        return [theme for theme, symbols in themes.items() if symbol in {item.upper().strip() for item in symbols}]
 
     def top_us_symbols(self) -> list[str]:
         """Load the largest active U.S.-listed operating companies from Nasdaq."""
@@ -213,12 +227,13 @@ class SignalEngine:
 
     def discover_symbols(self) -> list[str]:
         """Quickly reduce a broad liquid universe before slower news/options analysis."""
-        core = self.config.get("discovery_universe", self.config["watchlist"])
+        core = self.config.get("discovery_universe", self.config.get("watchlist", []))
+        theme_names = self.theme_universe_symbols()
         try:
             broad = self.top_us_symbols()
         except Exception:
             broad = []
-        universe = list(dict.fromkeys([*core, *broad]))
+        universe = list(dict.fromkeys([*theme_names, *core, *broad]))
         limit = min(int(self.config.get("discovery_limit", 20)), len(universe))
         move_limit = min(int(self.config.get("move_discovery_limit", 20)), len(universe))
         try:
@@ -255,7 +270,7 @@ class SignalEngine:
                 news_names = self.news_discovery_symbols()
             except Exception:
                 news_names = []
-            priority = [*self.config.get("priority_symbols", []), *news_names, *move_names, *selected]
+            priority = [*self.config.get("priority_symbols", []), *theme_names, *news_names, *move_names, *selected]
             return list(dict.fromkeys(priority))
         except Exception:
             return self.config["watchlist"]
@@ -644,6 +659,131 @@ class SignalEngine:
             "verify": verify,
         }
 
+    def advantage_profile(
+        self,
+        symbol: str,
+        data: dict[str, float],
+        option: dict[str, Any] | None,
+        move_quality: dict[str, Any],
+        checklist: dict[str, bool],
+        darvas: dict[str, Any],
+        setup_status: str,
+        not_late: bool,
+        extended_watch: bool,
+    ) -> dict[str, Any]:
+        """Score whether a candidate fits Dylan's small-account grind rules."""
+        account = float(self.config["account_size"])
+        max_premium = account * float(self.config["max_risk_per_trade_pct"]) / 100
+        ideal_min = float(self.config.get("small_account_contract_ideal_min", 10))
+        ideal_max = min(float(self.config.get("small_account_contract_ideal_max", 35)), max_premium)
+        themes = self.symbol_themes(symbol)
+        positives: list[str] = []
+        warnings: list[str] = []
+        score = 0
+
+        if themes:
+            score += 5
+            positives.append(f"Theme focus: {', '.join(themes)}.")
+
+        if self.stock_price_fits_account(data["price"]):
+            score += 10
+            positives.append(f"Underlying price ${data['price']:.2f} fits the account-scaled universe.")
+        else:
+            warnings.append(f"Underlying price ${data['price']:.2f} is outside the account-scaled universe.")
+
+        dollar_volume = data["price"] * data["avg_volume"]
+        if data["avg_volume"] >= self.config["minimum_average_volume"] and dollar_volume >= self.config.get("minimum_average_dollar_volume", 0):
+            score += 10
+            positives.append("Stock liquidity is strong enough for watchlist analysis.")
+        else:
+            warnings.append("Stock liquidity is too weak for a clean small-account trade.")
+
+        premium = None
+        if option:
+            premium = float(option["estimated_cost_and_max_loss"])
+            if premium <= max_premium:
+                score += 12
+                positives.append(f"Contract max loss ${premium:.2f} stays under the ${max_premium:.2f} risk cap.")
+            else:
+                warnings.append(f"Contract max loss ${premium:.2f} is above the ${max_premium:.2f} risk cap.")
+            if ideal_min <= premium <= ideal_max:
+                score += 10
+                positives.append(f"Contract sits in the ideal ${ideal_min:.0f}-${ideal_max:.0f} small-account cost zone.")
+            else:
+                warnings.append(f"Contract is outside the ideal ${ideal_min:.0f}-${ideal_max:.0f} cost zone.")
+            if option["spread_pct"] <= 20:
+                score += 6
+                positives.append("Bid/ask spread is acceptable for a limit order.")
+            else:
+                warnings.append(f"Spread is wide at {option['spread_pct']:.1f}%; avoid market orders.")
+            if option["volume"] >= self.config["minimum_option_volume"] and option["open_interest"] >= self.config["minimum_open_interest"]:
+                score += 7
+                positives.append("Option volume and open interest pass liquidity rules.")
+            else:
+                warnings.append("Option contract liquidity is thin.")
+            if self.config["option_days_min"] <= option["days_to_expiry"] <= self.config["option_days_max"]:
+                score += 5
+                positives.append("Expiration fits the 14-35 DTE swing window.")
+        else:
+            warnings.append("No affordable liquid option contract found; do not stretch the risk cap.")
+
+        if setup_status == "TRADE SETUP":
+            score += 15
+            positives.append("Full TRADE SETUP passed the playbook gate.")
+        elif setup_status in {"WATCH", "MOVE WATCH", "PUT REVERSAL WATCH", "CALL REVERSAL WATCH"}:
+            score += 7
+            positives.append(f"{setup_status} is worth studying, but it still needs entry confirmation.")
+        elif "EXTENDED" in setup_status:
+            warnings.append("Move is extended; edge is lower until it bases, holds, or rejects.")
+
+        if not_late and not extended_watch:
+            score += 8
+            positives.append("Move is not late or excessively stretched.")
+        else:
+            warnings.append("Move is late/stretched; wait for base, hold, or rejection.")
+
+        if move_quality["actionable_catalyst"]:
+            score += 8
+            positives.append("Source-of-move check supports the setup.")
+        elif move_quality["source_type"] in {"Relief bounce", "Failed bounce / downside reversal"}:
+            score += 5
+            positives.append("CAG-style bounce/fade pattern found; wait for confirmation.")
+        else:
+            warnings.append(f"Source-of-move is weak: {move_quality['label']}.")
+
+        if checklist.get("Clean Darvas box / base / structure") and checklist.get("Exact pivotal point"):
+            score += 7
+            positives.append("Darvas structure gives a clear level to trade against.")
+        else:
+            warnings.append("Darvas structure is not clean enough yet.")
+
+        if darvas.get("breakout_confirmed") and darvas.get("volume_confirmed"):
+            score += 10
+            positives.append("Price and volume confirmation are present.")
+        else:
+            warnings.append("Price/volume confirmation is not complete yet.")
+
+        score = max(0, min(100, int(round(score))))
+        if score >= 80:
+            label = "SMALL ACCOUNT EDGE"
+        elif score >= 65:
+            label = "GOOD WATCHLIST EDGE"
+        elif score >= 50:
+            label = "STUDY ONLY"
+        else:
+            label = "NO SMALL-ACCOUNT EDGE"
+
+        return {
+            "label": label,
+            "score": score,
+            "themes": themes,
+            "max_premium_risk": round(max_premium, 2),
+            "ideal_contract_cost": f"${ideal_min:.0f}-${ideal_max:.0f}",
+            "contract_cost": round(premium, 2) if premium is not None else None,
+            "positives": positives,
+            "warnings": warnings,
+        }
+
     def option_contract(self, symbol: str, direction: str, price: float) -> dict[str, Any] | None:
         ticker = yf.Ticker(symbol)
         today = datetime.now(timezone.utc).date()
@@ -924,12 +1064,15 @@ class SignalEngine:
             entry = f"Entry only after a 15m/5m hold or retest below Darvas bottom ${darvas['box_bottom']:.2f} with volume."
             invalidation = f"Chart stop: above Darvas bottom/retest, approximately ${min(darvas['box_top'], darvas['box_bottom'] + box_height * .25):.2f}."
             target = f"Underlying targets: ${max(0, darvas['box_bottom'] - box_height):.2f}, then ${max(0, darvas['box_bottom'] - box_height * 2):.2f}."
+        advantage_profile = self.advantage_profile(
+            symbol, data, option, move_quality, checklist, darvas, setup_status, not_late, extended_watch
+        )
         holding_plan = self.holding_plan(setup_status, option, earnings, confidence, reversal_watch, extended_watch)
         return Candidate(symbol, direction, confidence, data["price"], score, thesis, catalysts, risks,
                          entry, invalidation, target, earnings, option, details, headlines,
                          setup_status, checklist, darvas, company, catalyst, setup_type, stage,
                          market_text, a_plus_score, reversal_watch, extended_watch,
-                         self.explain_catalyst(catalyst), holding_plan, move_quality)
+                         self.explain_catalyst(catalyst), holding_plan, move_quality, advantage_profile)
 
     def scan(self) -> tuple[list[Candidate], list[str]]:
         candidates: list[Candidate] = []
@@ -947,7 +1090,15 @@ class SignalEngine:
         status_rank = {"TRADE SETUP": 4, "PUT REVERSAL WATCH": 3, "CALL REVERSAL WATCH": 3,
                        "EXTENDED CALL WATCH": 2, "EXTENDED PUT WATCH": 2, "MOVE WATCH": 2,
                        "WATCH": 1, "SKIP": 0}
-        candidates.sort(key=lambda item: (status_rank[item.setup_status], item.a_plus_score, item.confidence), reverse=True)
+        candidates.sort(
+            key=lambda item: (
+                status_rank[item.setup_status],
+                item.advantage_profile["score"],
+                item.a_plus_score,
+                item.confidence,
+            ),
+            reverse=True,
+        )
         calls = [item for item in candidates if item.direction == "CALL"][: int(self.config.get("max_call_candidates", 3))]
         puts = [item for item in candidates if item.direction == "PUT"][: int(self.config.get("max_put_candidates", 3))]
         return [*calls, *puts], errors
