@@ -6,3 +6,5 @@ __pycache__/
 work/
 streamlit*.log
 *.log
+member_code_secret.txt
+member_codes_private.txt

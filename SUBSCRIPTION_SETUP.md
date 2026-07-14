@@ -26,7 +26,10 @@ The app now supports a simple paid-membership gate.
 SUBSCRIPTION_ENABLED = "true"
 SUBSCRIPTION_PRICE_LABEL = "$24.99/month"
 STRIPE_PAYMENT_LINK = "https://buy.stripe.com/YOUR_PAYMENT_LINK"
-ACCESS_CODES = "DAVE-MEMBER-001,DAVE-MEMBER-002,DAVE-MEMBER-003"
+ACCESS_CODES = ""
+ROTATING_ACCESS_SECRET = "a-long-random-private-secret"
+ROTATING_ACCESS_PERIOD = "monthly"
+ROTATING_ACCESS_GRACE_PERIODS = "0"
 SUPPORT_EMAIL = "your_support_email@example.com"
 ```
 
@@ -34,18 +37,32 @@ SUPPORT_EMAIL = "your_support_email@example.com"
 
 ## How to use access codes
 
-The simple version is manual:
+The simple rotating-code version is still manual after payment, but the code refreshes automatically by billing period:
 
 1. Customer pays through Stripe.
 2. You confirm payment in Stripe.
-3. You send them one access code.
-4. If someone cancels, remove or rotate that code in Streamlit secrets.
+3. You generate their monthly code using their subscriber email.
+4. You send them that email-specific monthly code.
+5. Next month, the old monthly code stops working and you generate the new one after renewal.
 
-Sharing the app link does **not** unlock the app for someone else because Streamlit session state is per visitor/session. However, a subscriber can still share their access code. To reduce that risk:
+Generate a code locally:
 
-- Create one code per subscriber.
-- Remove canceled/refunded subscriber codes.
-- Rotate codes if one gets shared.
+```powershell
+.venv\Scripts\python.exe generate_member_code.py customer@email.com
+```
+
+Generate next month's code:
+
+```powershell
+.venv\Scripts\python.exe generate_member_code.py customer@email.com --ahead 1
+```
+
+Sharing the app link does **not** unlock the app for someone else because Streamlit session state is per visitor/session. However, a subscriber can still share their email/code pair. To reduce that risk:
+
+- Codes are tied to subscriber email.
+- Codes rotate every month by default.
+- Use `ROTATING_ACCESS_PERIOD = "daily"` only if you want daily codes, which is more work.
+- Keep `ROTATING_ACCESS_SECRET` private and never commit it to GitHub.
 - Tell subscribers not to share codes in the membership terms.
 
 This is easy to launch but not fully automated. For a bigger business, upgrade later to Stripe Checkout + webhooks + a subscriber database so access is tied to a paid Stripe customer instead of a manual code.

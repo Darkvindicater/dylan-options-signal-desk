@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -83,6 +85,57 @@ def secret_list(name: str) -> list[str]:
     return [item.strip() for item in str(value).split(",") if item.strip()]
 
 
+def normalize_access_code(code: str) -> str:
+    return code.strip().upper().replace(" ", "")
+
+
+def month_key(months_back: int = 0) -> str:
+    now = datetime.now().astimezone()
+    year = now.year
+    month = now.month - months_back
+    while month <= 0:
+        month += 12
+        year -= 1
+    return f"{year:04d}{month:02d}"
+
+
+def rotating_period_keys(period: str, grace_periods: int) -> list[str]:
+    period = period.strip().lower()
+    grace_periods = max(0, min(grace_periods, 3))
+    now = datetime.now().astimezone()
+    if period == "daily":
+        return [(now - timedelta(days=i)).strftime("%Y%m%d") for i in range(grace_periods + 1)]
+    return [month_key(i) for i in range(grace_periods + 1)]
+
+
+def rotating_member_code(email: str, secret: str, period_key: str) -> str:
+    normalized_email = email.strip().lower()
+    digest = hmac.new(
+        secret.encode("utf-8"),
+        f"{normalized_email}|{period_key}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest().upper()
+    return f"DD-{period_key}-{digest[:4]}-{digest[4:8]}"
+
+
+def rotating_access_code_is_valid(email: str, submitted_code: str) -> bool:
+    secret = str(secret_value("ROTATING_ACCESS_SECRET", "")).strip()
+    if not secret or not email.strip() or not submitted_code.strip():
+        return False
+    period = str(secret_value("ROTATING_ACCESS_PERIOD", "monthly")).strip().lower()
+    try:
+        grace_periods = int(secret_value("ROTATING_ACCESS_GRACE_PERIODS", 0))
+    except (TypeError, ValueError):
+        grace_periods = 0
+
+    submitted = normalize_access_code(submitted_code)
+    for period_key in rotating_period_keys(period, grace_periods):
+        expected = normalize_access_code(rotating_member_code(email, secret, period_key))
+        if hmac.compare_digest(submitted, expected):
+            return True
+    return False
+
+
 def require_user_agreement() -> None:
     if st.session_state.get("accepted_terms_version") == USER_AGREEMENT_VERSION:
         return
@@ -118,9 +171,10 @@ def require_subscription_if_enabled() -> None:
         for code in secret_list("ACCESS_CODES")
         if code.strip()
     }
+    rotating_secret = str(secret_value("ROTATING_ACCESS_SECRET", "")).strip()
     subscription_enabled = secret_bool(
         "SUBSCRIPTION_ENABLED",
-        bool(stripe_payment_link or valid_access_codes),
+        bool(stripe_payment_link or valid_access_codes or rotating_secret),
     )
     if not subscription_enabled:
         return
@@ -157,7 +211,9 @@ def require_subscription_if_enabled() -> None:
         submitted = st.form_submit_button("Unlock member access", use_container_width=True)
 
     if submitted:
-        if valid_access_codes and code.strip().upper() in valid_access_codes:
+        static_code_ok = valid_access_codes and normalize_access_code(code) in valid_access_codes
+        rotating_code_ok = rotating_access_code_is_valid(email, code)
+        if static_code_ok or rotating_code_ok:
             st.session_state["subscriber_access_granted"] = True
             st.session_state["subscriber_email"] = email.strip()
             st.rerun()
@@ -169,8 +225,8 @@ def require_subscription_if_enabled() -> None:
 
     st.caption(
         "Simple membership mode uses Stripe Payment Links plus private Streamlit secrets. "
-        "Sharing the app link will not share an unlocked session, but access codes can still be shared. "
-        "For stronger protection, use one code per subscriber and rotate canceled codes. "
+        "Sharing the app link will not share an unlocked session. Rotating codes can be tied to a subscriber email "
+        "and refresh each billing period. "
         "For fully automated subscriptions, add Stripe Checkout webhooks and a subscriber database."
     )
     st.stop()
