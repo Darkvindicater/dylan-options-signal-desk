@@ -13,6 +13,7 @@ from engine import SignalEngine
 
 ROOT = Path(__file__).parent
 APP_STATE_VERSION = 21
+USER_AGREEMENT_VERSION = "2026-07-14"
 CANDIDATE_SCHEMA_FIELDS = (
     "setup_status", "checklist", "darvas", "company", "catalyst",
     "setup_type", "a_plus_score", "reversal_watch", "extended_watch",
@@ -23,6 +24,124 @@ CANDIDATE_SCHEMA_FIELDS = (
 
 def load_config() -> dict:
     return json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+
+
+USER_AGREEMENT_TEXT = """
+### Dylan Dave Options Desk User Agreement
+
+Last updated: July 14, 2026
+
+By using this dashboard, you agree to the following terms:
+
+1. **Educational decision support only.** Dylan Dave Options Desk is a research and education tool. It is not a brokerage, investment adviser, financial adviser, legal adviser, tax adviser, or fiduciary.
+2. **No personalized financial advice.** The app does not know your full financial situation, risk tolerance, objectives, debts, income, obligations, or suitability. Nothing shown is a recommendation that you personally buy, sell, hold, or short any stock or option.
+3. **Options are high risk.** Long options can lose 100% of premium. Short-dated contracts can lose value quickly from price movement, volatility changes, bid/ask spread, and time decay.
+4. **Data may be wrong or delayed.** Public market data, news feeds, earnings dates, option chains, Greeks, sentiment scores, confidence scores, and app calculations may be incomplete, delayed, inaccurate, or unavailable.
+5. **You are responsible for every trade.** You must verify all prices, option contracts, bid/ask spreads, liquidity, earnings dates, news, and brokerage tradability before entering any order. You alone decide whether to trade.
+6. **No guarantee of profit.** The app does not promise wins, income, daily profit, account growth, or any specific result. A high confidence score is not a probability of winning.
+7. **No liability for losses.** To the fullest extent permitted by law, you agree that Dylan Dave Options Desk, its creator, operators, and contributors are not responsible for trading losses, missed opportunities, data errors, platform outages, or decisions you make after using the app.
+8. **Hold harmless.** To the fullest extent permitted by law, you agree not to sue or bring claims against the creator or operators for losses connected to your use of the app, your interpretation of app output, or any trade you place.
+9. **No emergency or professional service.** For financial, legal, tax, or investment advice, consult a qualified professional.
+10. **Acceptance.** If you do not agree, do not use the app.
+
+This agreement is a practical protective notice, not a substitute for attorney-drafted Terms of Service. If this app becomes a real paid business, have a licensed attorney review it.
+"""
+
+
+def secret_value(name: str, default: object = "") -> object:
+    """Read Streamlit secrets safely both locally and on Community Cloud."""
+    try:
+        return st.secrets.get(name, default)
+    except Exception:
+        return default
+
+
+def secret_bool(name: str, default: bool = False) -> bool:
+    value = secret_value(name, default)
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def secret_list(name: str) -> list[str]:
+    value = secret_value(name, "")
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [item.strip() for item in str(value).split(",") if item.strip()]
+
+
+def require_user_agreement() -> None:
+    if st.session_state.get("accepted_terms_version") == USER_AGREEMENT_VERSION:
+        return
+
+    st.subheader("Before you use the desk")
+    st.write(
+        "Please accept the user agreement. This protects the project and makes it clear "
+        "that every trade decision stays with the person placing the trade."
+    )
+    with st.expander("Read the full user agreement", expanded=True):
+        st.markdown(USER_AGREEMENT_TEXT)
+
+    signer_name = st.text_input("Type your full name to accept", key="agreement_name")
+    accepted = st.checkbox(
+        "I have read and agree to the Dylan Dave Options Desk User Agreement.",
+        key="agreement_checkbox",
+    )
+    if st.button("I agree and enter the app", type="primary", use_container_width=True):
+        if not signer_name.strip() or not accepted:
+            st.error("Type your name and check the agreement box before entering.")
+        else:
+            st.session_state["accepted_terms_version"] = USER_AGREEMENT_VERSION
+            st.session_state["accepted_terms_name"] = signer_name.strip()
+            st.session_state["accepted_terms_time"] = datetime.now().astimezone().isoformat()
+            st.rerun()
+    st.stop()
+
+
+def require_subscription_if_enabled() -> None:
+    if not secret_bool("SUBSCRIPTION_ENABLED", False):
+        return
+
+    if st.session_state.get("subscriber_access_granted"):
+        st.sidebar.success("Member access active")
+        return
+
+    stripe_payment_link = str(secret_value("STRIPE_PAYMENT_LINK", "")).strip()
+    valid_access_codes = set(secret_list("ACCESS_CODES"))
+
+    st.subheader("Dylan Dave Options Desk membership")
+    st.metric("Monthly subscription", "$24.99")
+    st.write(
+        "Subscribe to unlock the scanner and deep-dive tools. After payment, enter the "
+        "member access code you received from Dylan."
+    )
+
+    if stripe_payment_link:
+        st.link_button("Subscribe for $24.99/month", stripe_payment_link, use_container_width=True)
+    else:
+        st.info(
+            "Subscription checkout is ready in the app, but Stripe is not connected yet. "
+            "Add STRIPE_PAYMENT_LINK in Streamlit secrets to turn on the payment button."
+        )
+
+    with st.form("member_access_form"):
+        email = st.text_input("Subscriber email")
+        code = st.text_input("Member access code", type="password")
+        submitted = st.form_submit_button("Unlock member access", use_container_width=True)
+
+    if submitted:
+        if valid_access_codes and code.strip() in valid_access_codes:
+            st.session_state["subscriber_access_granted"] = True
+            st.session_state["subscriber_email"] = email.strip()
+            st.rerun()
+        else:
+            st.error("Access code not recognized. Check the code Dylan sent you after payment.")
+
+    st.caption(
+        "Simple membership mode uses Stripe Payment Links plus private Streamlit secrets. "
+        "For fully automated subscriptions, add Stripe Checkout webhooks and a subscriber database."
+    )
+    st.stop()
 
 
 def candidate_schema_is_current(candidates: list) -> bool:
@@ -52,6 +171,8 @@ st.warning(
     "and cannot guarantee profit. Verify live quotes, earnings, liquidity, bid/ask spreads, "
     "and tradability in your own brokerage account before risking money."
 )
+require_user_agreement()
+require_subscription_if_enabled()
 st.caption("Dylan Playbook V2: Market → theme → story → catalyst → stage → leadership → structure → confirmation → option → risk.")
 st.caption("Only TRADE SETUP names have passed the live, liquid, affordable contract gate; WATCH names may appear before a contract qualifies.")
 st.caption("STUDY ONLY names are educational radar ideas with a theme, move, or catalyst clue; they are not entries.")

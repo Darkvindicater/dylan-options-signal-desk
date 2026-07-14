@@ -33,6 +33,18 @@ Short version:
 
 Do not upload `.venv/`, logs, cache folders, or `.streamlit/secrets.toml`.
 
+## Paid subscription mode
+
+The app includes an optional membership gate for a `$24.99/month` Stripe subscription and a user agreement screen before access. See `SUBSCRIPTION_SETUP.md`.
+
+Short version:
+
+1. Create a recurring `$24.99/month` Stripe Payment Link.
+2. Add the payment link and member access codes in Streamlit secrets.
+3. Set `SUBSCRIPTION_ENABLED = "true"`.
+
+Never commit payment links, access codes, API keys, or `.streamlit/secrets.toml` to GitHub.
+
 ## How the scanner works
 
 1. Loads the top 1,000 stocks by market capitalization from Nasdaq and merges them with the core list.
