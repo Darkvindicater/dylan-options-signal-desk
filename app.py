@@ -34,15 +34,17 @@ Last updated: July 14, 2026
 By using this dashboard, you agree to the following terms:
 
 1. **Educational decision support only.** Dylan Dave Options Desk is a research and education tool. It is not a brokerage, investment adviser, financial adviser, legal adviser, tax adviser, or fiduciary.
-2. **No personalized financial advice.** The app does not know your full financial situation, risk tolerance, objectives, debts, income, obligations, or suitability. Nothing shown is a recommendation that you personally buy, sell, hold, or short any stock or option.
-3. **Options are high risk.** Long options can lose 100% of premium. Short-dated contracts can lose value quickly from price movement, volatility changes, bid/ask spread, and time decay.
-4. **Data may be wrong or delayed.** Public market data, news feeds, earnings dates, option chains, Greeks, sentiment scores, confidence scores, and app calculations may be incomplete, delayed, inaccurate, or unavailable.
-5. **You are responsible for every trade.** You must verify all prices, option contracts, bid/ask spreads, liquidity, earnings dates, news, and brokerage tradability before entering any order. You alone decide whether to trade.
-6. **No guarantee of profit.** The app does not promise wins, income, daily profit, account growth, or any specific result. A high confidence score is not a probability of winning.
-7. **No liability for losses.** To the fullest extent permitted by law, you agree that Dylan Dave Options Desk, its creator, operators, and contributors are not responsible for trading losses, missed opportunities, data errors, platform outages, or decisions you make after using the app.
-8. **Hold harmless.** To the fullest extent permitted by law, you agree not to sue or bring claims against the creator or operators for losses connected to your use of the app, your interpretation of app output, or any trade you place.
-9. **No emergency or professional service.** For financial, legal, tax, or investment advice, consult a qualified professional.
-10. **Acceptance.** If you do not agree, do not use the app.
+2. **Not registered or regulator-approved.** Dylan Dave Options Desk and its creator are not presented as SEC-registered, state-registered, FINRA-registered, broker-dealer approved, investment-adviser approved, or otherwise approved by any financial regulator. No regulator has reviewed, endorsed, or approved the app's signals, scoring, watchlists, or educational content.
+3. **No personalized financial advice.** The app does not know your full financial situation, risk tolerance, objectives, debts, income, obligations, or suitability. Nothing shown is a recommendation that you personally buy, sell, hold, or short any stock or option.
+4. **Do your own research.** You must do your own independent research and due diligence before making any financial decision. Do not rely only on the app, a social-media post, a headline, or another user's result.
+5. **Options are high risk.** Long options can lose 100% of premium. Short-dated contracts can lose value quickly from price movement, volatility changes, bid/ask spread, and time decay.
+6. **Data may be wrong or delayed.** Public market data, news feeds, earnings dates, option chains, Greeks, sentiment scores, confidence scores, and app calculations may be incomplete, delayed, inaccurate, or unavailable.
+7. **You are responsible for every trade.** You must verify all prices, option contracts, bid/ask spreads, liquidity, earnings dates, news, and brokerage tradability before entering any order. You alone decide whether to trade.
+8. **No guarantee of profit.** The app does not promise wins, income, daily profit, account growth, or any specific result. A high confidence score is not a probability of winning.
+9. **No liability for losses.** To the fullest extent permitted by law, you agree that Dylan Dave Options Desk, its creator, operators, and contributors are not responsible for trading losses, missed opportunities, data errors, platform outages, or decisions you make after using the app.
+10. **Hold harmless.** To the fullest extent permitted by law, you agree not to sue or bring claims against the creator or operators for losses connected to your use of the app, your interpretation of app output, or any trade you place.
+11. **No emergency or professional service.** For financial, legal, tax, or investment advice, consult a qualified professional. You may independently check investment-professional registration through official tools such as SEC/Investor.gov IAPD and FINRA BrokerCheck.
+12. **Acceptance.** If you do not agree, do not use the app.
 
 This agreement is a practical protective notice, not a substitute for attorney-drafted Terms of Service. If this app becomes a real paid business, have a licensed attorney review it.
 """
@@ -167,8 +169,9 @@ if (
 st.title("Options Signal Desk")
 st.warning(
     "Public safety note: this dashboard is educational decision support only. "
-    "It does not place trades, does not provide personalized financial advice, "
-    "and cannot guarantee profit. Verify live quotes, earnings, liquidity, bid/ask spreads, "
+    "It is not a registered or regulator-approved financial adviser, does not place trades, "
+    "does not provide personalized financial advice, and cannot guarantee profit. "
+    "Do your own research and verify live quotes, earnings, liquidity, bid/ask spreads, "
     "and tradability in your own brokerage account before risking money."
 )
 require_user_agreement()

@@ -2,7 +2,7 @@
 
 A Streamlit decision-support dashboard for studying Robinhood-style option setups. It combines Dylan's watchlist, theme lanes, recent news, public price data, earnings context, and affordable-contract filters to return a balanced CALL/PUT watch slate.
 
-It does not place orders, provide personalized financial advice, or guarantee results. It may return fewer candidates when required playbook rules are missing or the option premium breaks the configured account risk cap.
+It does not place orders, provide personalized financial advice, claim financial-regulator approval, or guarantee results. Users must do their own research and verify every setup before risking money. It may return fewer candidates when required playbook rules are missing or the option premium breaks the configured account risk cap.
 
 ## Open anytime on this computer
 
