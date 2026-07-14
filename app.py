@@ -112,29 +112,43 @@ def require_user_agreement() -> None:
 
 
 def require_subscription_if_enabled() -> None:
-    if not secret_bool("SUBSCRIPTION_ENABLED", False):
+    stripe_payment_link = str(secret_value("STRIPE_PAYMENT_LINK", "")).strip()
+    valid_access_codes = {
+        code.strip().upper()
+        for code in secret_list("ACCESS_CODES")
+        if code.strip()
+    }
+    subscription_enabled = secret_bool(
+        "SUBSCRIPTION_ENABLED",
+        bool(stripe_payment_link or valid_access_codes),
+    )
+    if not subscription_enabled:
         return
 
     if st.session_state.get("subscriber_access_granted"):
-        st.sidebar.success("Member access active")
+        st.sidebar.success("Member access active for this browser session")
         return
 
-    stripe_payment_link = str(secret_value("STRIPE_PAYMENT_LINK", "")).strip()
-    valid_access_codes = set(secret_list("ACCESS_CODES"))
+    price_label = str(secret_value("SUBSCRIPTION_PRICE_LABEL", "$24.99/month")).strip() or "$24.99/month"
+    support_email = str(secret_value("SUPPORT_EMAIL", "")).strip()
 
     st.subheader("Dylan Dave Options Desk membership")
-    st.metric("Monthly subscription", "$24.99")
+    st.metric("Monthly subscription", price_label)
     st.write(
-        "Subscribe to unlock the scanner and deep-dive tools. After payment, enter the "
-        "member access code you received from Dylan."
+        "This link can be shared, but app access does not unlock for a new visitor until "
+        "they subscribe or enter their own member access code."
+    )
+    st.info(
+        "Unpaid visitors see this membership page first. Paid members can unlock the scanner "
+        "with a private access code after payment."
     )
 
     if stripe_payment_link:
-        st.link_button("Subscribe for $24.99/month", stripe_payment_link, use_container_width=True)
+        st.link_button(f"Subscribe for {price_label}", stripe_payment_link, use_container_width=True)
     else:
         st.info(
-            "Subscription checkout is ready in the app, but Stripe is not connected yet. "
-            "Add STRIPE_PAYMENT_LINK in Streamlit secrets to turn on the payment button."
+            "Subscription checkout is ready, but Stripe is not connected yet. "
+            "Add STRIPE_PAYMENT_LINK in Streamlit secrets so unpaid visitors can pay."
         )
 
     with st.form("member_access_form"):
@@ -143,15 +157,20 @@ def require_subscription_if_enabled() -> None:
         submitted = st.form_submit_button("Unlock member access", use_container_width=True)
 
     if submitted:
-        if valid_access_codes and code.strip() in valid_access_codes:
+        if valid_access_codes and code.strip().upper() in valid_access_codes:
             st.session_state["subscriber_access_granted"] = True
             st.session_state["subscriber_email"] = email.strip()
             st.rerun()
         else:
-            st.error("Access code not recognized. Check the code Dylan sent you after payment.")
+            st.error("Access code not recognized. Check the code Dylan sent after payment.")
+
+    if support_email:
+        st.caption(f"Need help with access? Email {support_email}.")
 
     st.caption(
         "Simple membership mode uses Stripe Payment Links plus private Streamlit secrets. "
+        "Sharing the app link will not share an unlocked session, but access codes can still be shared. "
+        "For stronger protection, use one code per subscriber and rotate canceled codes. "
         "For fully automated subscriptions, add Stripe Checkout webhooks and a subscriber database."
     )
     st.stop()
