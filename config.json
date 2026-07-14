@@ -8,12 +8,12 @@
   "theme_discovery_limit": 10,
   "broad_discovery_pool_size": 500,
   "max_symbols_to_analyze": 45,
-  "stop_after_budget_slate_filled": true,
+  "stop_after_budget_slate_filled": false,
   "budget_qualified_main_list": true,
   "small_account_grind_mode": true,
   "account_goal": 1000,
-  "priority_symbols": ["CAG", "LEVI", "BROS", "SOFI", "F", "AAL"],
-  "budget_priority_symbols": ["SOFI", "F", "BAC", "PFE", "CAG", "AAL", "CCL", "RIVN", "LCID", "NIO", "SNAP", "WBD", "INTC", "GM", "WFC", "LEVI", "HIMS", "DAL", "UAL", "PYPL", "AFRM", "DKNG", "RBLX", "MARA", "BROS", "HOOD", "PLTR"],
+  "priority_symbols": ["MARA", "SOFI", "CAG", "LEVI", "BROS", "F", "AAL"],
+  "budget_priority_symbols": ["MARA", "SOFI", "F", "BAC", "PFE", "CAG", "AAL", "CCL", "RIVN", "LCID", "NIO", "SNAP", "WBD", "INTC", "GM", "WFC", "LEVI", "HIMS", "DAL", "UAL", "PYPL", "AFRM", "DKNG", "RBLX", "BROS", "HOOD", "PLTR"],
   "enabled_theme_universes": ["Restaurants", "Retail", "Healthcare", "AI", "Cars / EV", "Beauty", "Technology"],
   "theme_universes": {
     "Restaurants": ["BROS", "CMG", "CAVA", "SHAK", "WEN", "DRI", "EAT", "BLMN", "CAKE", "TXRH", "YUM", "YUMC", "QSR", "DPZ", "PZZA", "JACK", "DIN", "PTLO", "BJRI", "RRGB", "WING", "PLAY", "SBUX", "MCD", "SG"],
@@ -25,7 +25,7 @@
     "Technology": ["AAPL", "MSFT", "NVDA", "AMD", "AVGO", "ORCL", "CRM", "ADBE", "NOW", "SHOP", "UBER", "HOOD", "COIN", "PYPL", "XYZ", "INTC", "QCOM", "AMAT", "MU", "SNOW", "NET", "DDOG", "MDB", "PANW", "CRWD", "TSM", "ASML", "KLAC", "LRCX"]
   },
   "discovery_universe": ["SPY", "QQQ", "IWM", "DIA", "GLD", "SLV", "TLT", "XLF", "XLE", "XLK", "XLV", "XLI", "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA", "AMD", "AVGO", "MU", "INTC", "PLTR", "ORCL", "CRM", "ADBE", "NFLX", "QCOM", "AMAT", "ARM", "SMCI", "DELL", "CSCO", "IBM", "NOW", "SHOP", "UBER", "ABNB", "DASH", "COIN", "MARA", "HOOD", "AFRM", "PYPL", "XYZ", "SOFI", "BAC", "JPM", "WFC", "GS", "MS", "V", "MA", "AXP", "F", "GM", "RIVN", "LCID", "NIO", "AAL", "DAL", "UAL", "CCL", "RCL", "LUV", "SNAP", "PINS", "RBLX", "DKNG", "HIMS", "WBD", "DIS", "FOX", "PFE", "MRNA", "LLY", "UNH", "CVS", "ABBV", "XOM", "CVX", "OXY", "SLB", "BA", "CAT", "GE", "RTX", "WMT", "TGT", "COST", "NKE", "SBUX", "MCD", "KO", "PEP", "HD", "LOW", "BABA", "JD", "LI", "XPEV"],
-  "account_size": 300,
+  "account_size": 350,
   "max_risk_per_trade_pct": 35,
   "max_candidates": 6,
   "max_call_candidates": 3,
@@ -48,6 +48,7 @@
   ,"fallback_option_max_spread_pct": 0.45
   ,"fallback_minimum_option_volume": 10
   ,"fallback_minimum_open_interest": 50
+  ,"option_last_price_fallback": true
   ,"minimum_checklist_score": 8
   ,"small_account_contract_ideal_min": 10
   ,"small_account_contract_ideal_max": 350

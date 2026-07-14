@@ -1,12 +1,12 @@
 # Dylan Options Signal Desk
 
-A local Robinhood-oriented decision-support dashboard that combines 102 core symbols with the live top 1,000 U.S.-listed stocks and returns up to four CALL or PUT candidates using Dylan's Options Trading Playbook V2.
+A Streamlit decision-support dashboard for studying Robinhood-style option setups. It combines Dylan's watchlist, theme lanes, recent news, public price data, earnings context, and affordable-contract filters to return a balanced CALL/PUT watch slate.
 
-It does not place orders or guarantee results. It may return fewer than four candidates when required playbook rules are missing.
+It does not place orders, provide personalized financial advice, or guarantee results. It may return fewer candidates when required playbook rules are missing or the option premium breaks the configured account risk cap.
 
 ## Open anytime on this computer
 
-Double-click `Open Options Signal Desk.bat`. Keep the terminal window open while using the dashboard. Open `http://localhost:8501` if the browser does not open automatically.
+Double-click `Open Options Signal Desk.bat`. Open `http://localhost:8502` if the browser does not open automatically.
 
 ## Install on another computer
 
@@ -18,6 +18,20 @@ python -m venv .venv
 pip install -r requirements.txt
 streamlit run app.py
 ```
+
+## Make it public
+
+The app is prepared for Streamlit Community Cloud deployment. See `DEPLOYMENT.md`.
+
+Short version:
+
+1. Push this folder to a GitHub repository.
+2. Go to `https://share.streamlit.io/`.
+3. Connect GitHub and choose the repository.
+4. Set the main file to `app.py`.
+5. Deploy.
+
+Do not upload `.venv/`, logs, cache folders, or `.streamlit/secrets.toml`.
 
 ## How the scanner works
 

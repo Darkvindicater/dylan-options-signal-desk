@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -115,6 +116,45 @@ class EngineTests(unittest.TestCase):
         )
         self.assertEqual(signal["pattern"], "failed_bounce")
         self.assertGreater(signal["score"], 0)
+
+    def test_premarket_up_fakeout_confirms_put_bias(self):
+        index = pd.to_datetime([
+            "2026-07-13 04:00", "2026-07-13 09:20", "2026-07-13 09:25",
+            "2026-07-13 09:30", "2026-07-13 09:35", "2026-07-13 09:40",
+            "2026-07-13 09:45",
+        ]).tz_localize("America/New_York")
+        frame = pd.DataFrame({
+            "Open": [10.00, 10.55, 10.60, 10.55, 10.45, 10.30, 10.20],
+            "High": [10.05, 10.70, 10.68, 10.60, 10.50, 10.35, 10.25],
+            "Low": [9.95, 10.50, 10.55, 10.40, 10.25, 10.15, 10.10],
+            "Close": [10.00, 10.60, 10.62, 10.45, 10.30, 10.20, 10.15],
+            "Volume": [1000, 1500, 1600, 5000, 6000, 7000, 8000],
+        }, index=index)
+
+        context = SignalEngine.interpret_premarket_open(frame, "PUT")
+
+        self.assertEqual(context["trade_bias"], "PUT")
+        self.assertEqual(context["gate"], "CONFIRMED")
+        self.assertIn("fakeout", context["label"].lower())
+
+    def test_premarket_detector_waits_before_first_15_minutes(self):
+        index = pd.to_datetime([
+            "2026-07-13 04:00", "2026-07-13 09:25",
+            "2026-07-13 09:30", "2026-07-13 09:35",
+        ]).tz_localize("America/New_York")
+        frame = pd.DataFrame({
+            "Open": [10.00, 10.40, 10.45, 10.50],
+            "High": [10.05, 10.45, 10.55, 10.60],
+            "Low": [9.95, 10.35, 10.40, 10.45],
+            "Close": [10.00, 10.42, 10.50, 10.55],
+            "Volume": [1000, 1500, 5000, 6000],
+        }, index=index)
+
+        context = SignalEngine.interpret_premarket_open(frame, "CALL")
+
+        self.assertEqual(context["trade_bias"], "WAIT")
+        self.assertEqual(context["gate"], "WAIT")
+        self.assertIn("9:45", context["label"])
 
     def test_restaurant_theme_symbols_are_enabled(self):
         engine = SignalEngine({
@@ -240,6 +280,143 @@ class EngineTests(unittest.TestCase):
 
         self.assertEqual([candidate.symbol for candidate in candidates], ["CALLGOOD", "PUTGOOD"])
         self.assertTrue(any("Budget filter found" in error for error in errors))
+        rejected = {row["Symbol"]: row["Why rejected"] for row in engine.rejection_report}
+        self.assertIn("CALLEXP", rejected)
+        self.assertIn("PUTNONE", rejected)
+        self.assertIn("above the account cap", rejected["CALLEXP"])
+        self.assertIn("No liquid near-the-money contract", rejected["PUTNONE"])
+
+    def test_option_last_price_fallback_surfaces_robinhood_quote_check(self):
+        expiry = (datetime.now(timezone.utc).date() + timedelta(days=21)).strftime("%Y-%m-%d")
+        option_frame = pd.DataFrame({
+            "contractSymbol": ["SOFI_FAKE_CALL"],
+            "strike": [19.0],
+            "lastPrice": [0.70],
+            "bid": [0.0],
+            "ask": [0.0],
+            "openInterest": [6000],
+            "volume": [1900],
+            "impliedVolatility": [0.55],
+        })
+        fake_ticker = SimpleNamespace(
+            options=[expiry],
+            option_chain=lambda _expiry: SimpleNamespace(calls=option_frame, puts=option_frame),
+        )
+        engine = SignalEngine({
+            "account_size": 350,
+            "max_risk_per_trade_pct": 35,
+            "option_days_min": 14,
+            "option_days_max": 35,
+            "preferred_contract_min": 10,
+            "preferred_contract_max": 350,
+            "minimum_option_volume": 100,
+            "minimum_open_interest": 500,
+            "budget_contract_fallback": True,
+            "fallback_option_max_distance": 0.08,
+            "fallback_option_max_spread_pct": 0.45,
+            "fallback_minimum_option_volume": 10,
+            "fallback_minimum_open_interest": 50,
+            "option_last_price_fallback": True,
+        })
+
+        with patch("engine.yf.Ticker", return_value=fake_ticker):
+            contract = engine.option_contract("SOFI", "CALL", 19.20)
+
+        self.assertIsNotNone(contract)
+        self.assertEqual(contract["quality_tier"], "Robinhood quote check")
+        self.assertEqual(contract["estimated_cost_and_max_loss"], 70.0)
+        self.assertIn("verify in Robinhood", contract["quote_status"])
+
+    def test_failed_pop_becomes_put_fade_watch(self):
+        config = {
+            "account_size": 350,
+            "max_risk_per_trade_pct": 35,
+            "minimum_stock_price": 5,
+            "max_stock_price_per_account_dollar": .25,
+            "minimum_average_volume": 500000,
+            "minimum_average_dollar_volume": 5000000,
+            "minimum_confidence": 80,
+            "watch_minimum_confidence": 52,
+            "minimum_checklist_score": 8,
+            "minimum_option_volume": 100,
+            "minimum_open_interest": 500,
+            "option_days_min": 14,
+            "option_days_max": 35,
+            "small_account_contract_ideal_min": 10,
+            "small_account_contract_ideal_max": 350,
+            "theme_universes": {},
+            "enabled_theme_universes": [],
+        }
+        engine = SignalEngine(config)
+        closes = [10.0] * 55 + [11.0, 10.55]
+        frame = pd.DataFrame({
+            "Close": closes,
+            "Volume": [2_000_000] * len(closes),
+        })
+        engine.market_data = lambda _symbol: frame
+        engine.indicators = lambda _frame: {
+            "price": 10.55,
+            "ema9": 10.30,
+            "ema21": 10.70,
+            "sma50": 11.00,
+            "rsi14": 42.0,
+            "return_5d": .02,
+            "return_20d": -.08,
+            "volume_ratio": .7,
+            "latest_volume_ratio": .6,
+            "avg_volume": 2_000_000,
+            "recent_high": 11.20,
+            "recent_low": 10.20,
+        }
+        engine.company_check = lambda _symbol: {
+            "name": "Fake Co",
+            "sector": "Financial Services",
+            "industry": "Crypto",
+            "business": "A test business.",
+            "revenue_growth": None,
+            "earnings_growth": None,
+            "debt_to_equity": None,
+        }
+        engine.news = lambda _symbol, _name: [{"title": "Fake Co reports operational update", "sentiment": .1}]
+        engine.catalyst_check = lambda _headlines: (True, "Operational catalyst")
+        engine.score = lambda _data, _headlines: (-2.2, {
+            "trend": -2.3,
+            "momentum": -1.0,
+            "rsi": -0.3,
+            "volume": -0.2,
+            "news_sentiment": .1,
+        })
+        engine.intraday_structure = lambda _symbol: {
+            "box_top": 11.20,
+            "box_bottom": 10.20,
+            "last_15m_close": 10.55,
+            "volume_ratio": .6,
+            "breakout_direction": "NONE",
+            "breakout_confirmed": False,
+            "volume_confirmed": False,
+            "failed_breakout_up": False,
+            "failed_breakdown_down": False,
+        }
+        engine.option_contract = lambda _symbol, direction, _price: {
+            "contract": "MARA_FAKE_PUT",
+            "estimated_cost_and_max_loss": 61.0,
+            "spread_pct": 999.0,
+            "volume": 500,
+            "open_interest": 1000,
+            "days_to_expiry": 21,
+            "estimated_delta": -.45 if direction == "PUT" else .45,
+        }
+        engine.earnings_date = lambda _symbol: "Not available"
+        engine.relative_strength = lambda _frame, _direction: (False, -.02)
+        engine.weinstein_stage = lambda _frame: "Stage 1 - base/transition"
+        engine.market_context = lambda: {"condition": "bullish", "SPY": .04, "QQQ": .04}
+
+        candidate = engine.analyze("MARA")
+
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate.direction, "PUT")
+        self.assertEqual(candidate.setup_status, "PUT FADE WATCH")
+        self.assertIn("failed-bounce", candidate.thesis)
 
     def test_small_account_advantage_rewards_affordable_liquid_contract(self):
         engine = SignalEngine({

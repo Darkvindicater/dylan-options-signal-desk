@@ -12,11 +12,12 @@ from engine import SignalEngine
 
 
 ROOT = Path(__file__).parent
-APP_STATE_VERSION = 18
+APP_STATE_VERSION = 21
 CANDIDATE_SCHEMA_FIELDS = (
     "setup_status", "checklist", "darvas", "company", "catalyst",
     "setup_type", "a_plus_score", "reversal_watch", "extended_watch",
     "catalyst_analysis", "holding_plan", "move_quality", "advantage_profile",
+    "premarket_context",
 )
 
 
@@ -40,19 +41,27 @@ if (
     st.session_state.get("app_state_version") != APP_STATE_VERSION
     or not candidate_schema_is_current(saved_candidates)
 ):
-    for key in ("candidates", "errors", "scan_time"):
+    for key in ("candidates", "errors", "rejections", "scan_time"):
         st.session_state.pop(key, None)
     st.session_state["app_state_version"] = APP_STATE_VERSION
 
 st.title("Options Signal Desk")
+st.warning(
+    "Public safety note: this dashboard is educational decision support only. "
+    "It does not place trades, does not provide personalized financial advice, "
+    "and cannot guarantee profit. Verify live quotes, earnings, liquidity, bid/ask spreads, "
+    "and tradability in your own brokerage account before risking money."
+)
 st.caption("Dylan Playbook V2: Market → theme → story → catalyst → stage → leadership → structure → confirmation → option → risk.")
 st.caption("Only TRADE SETUP names have passed the live, liquid, affordable contract gate; WATCH names may appear before a contract qualifies.")
 st.caption("STUDY ONLY names are educational radar ideas with a theme, move, or catalyst clue; they are not entries.")
 st.caption("MOVE WATCH means the move is worth studying, but it is not an approved entry.")
 st.caption("PUT/CALL REVERSAL WATCH means the prior move is stretched; it is not an entry until the underlying confirms a reversal through structure and volume.")
+st.caption("PUT FADE WATCH means a prior pop is failing; it is not an entry until price rejects the failed-pop area and Robinhood confirms the contract quote.")
 st.caption("EXTENDED WATCH means momentum remains intact but chasing is blocked until a new base, hold, or retest forms.")
 st.caption("Hold clock: TRADE SETUP ideas default to 3-5 trading days, shortened near earnings, expiration, or failed structure.")
 st.caption("Move source check: separates real news + volume moves from relief bounces, pre-earnings positioning, and index/rebalance flow.")
+st.caption("Premarket/open trap detector: premarket alone is not enough; Dave waits for 9:45-10:30 ET confirmation, VWAP hold, or rejection.")
 st.caption("CAG-style move hunter: looks for two-day bounce/fade patterns, then waits for hold or rejection confirmation.")
 st.caption("Small-account edge: favors affordable liquid contracts, clean levels, and theme names like Restaurants.")
 st.caption("Balanced radar: up to 3 CALL names and 3 PUT names. The app never changes direction merely to fill a quota.")
@@ -61,9 +70,9 @@ config = load_config()
 with st.sidebar:
     st.header("Risk controls")
     grind_mode = st.toggle("Small-account grind mode", value=bool(config.get("small_account_grind_mode", True)))
-    account = st.number_input("Account size ($)", 100, 100000, int(config["account_size"]), 50, key="account_size_v18")
-    account_goal = st.number_input("Account goal ($)", 300, 100000, int(config.get("account_goal", 1000)), 50, key="account_goal_v18")
-    risk_pct = st.slider("Maximum contract cap (% of account)", 1, 100, int(config["max_risk_per_trade_pct"]), 1, key="premium_cap_v18")
+    account = st.number_input("Account size ($)", 100, 100000, int(config["account_size"]), 50, key="account_size_v19")
+    account_goal = st.number_input("Account goal ($)", 300, 100000, int(config.get("account_goal", 1000)), 50, key="account_goal_v19")
+    risk_pct = st.slider("Maximum contract cap (% of account)", 1, 100, int(config["max_risk_per_trade_pct"]), 1, key="premium_cap_v19")
     st.caption(
         "Grind mode is built for low-priced stocks and contracts that fit the account. "
         "A smaller cap gives more survival; a bigger cap gives more risk."
@@ -138,6 +147,7 @@ if st.button("Run market scan", type="primary", use_container_width=True):
         candidates, errors = engine.scan()
         st.session_state["candidates"] = candidates
         st.session_state["errors"] = errors
+        st.session_state["rejections"] = getattr(engine, "rejection_report", [])
         st.session_state["scan_time"] = datetime.now().astimezone().strftime("%Y-%m-%d %I:%M:%S %p %Z")
 
 st.divider()
@@ -220,8 +230,9 @@ if "candidates" not in st.session_state:
 
 st.caption(f"Last scan: {st.session_state['scan_time']}. Quotes may be delayed; confirm every price in Robinhood.")
 candidates = st.session_state["candidates"]
+rejections = st.session_state.get("rejections", [])
 if not candidate_schema_is_current(candidates):
-    for key in ("candidates", "errors", "scan_time"):
+    for key in ("candidates", "errors", "rejections", "scan_time"):
         st.session_state.pop(key, None)
     st.warning("Dave updated the app after your last scan, so I cleared the old cached results. Press **Run market scan** again to get fresh candidates.")
     st.stop()
@@ -273,8 +284,11 @@ else:
                 st.write(f"Price: ${c.price:.2f}")
                 st.write(f"Premium: ${c.option['estimated_cost_and_max_loss']:.2f}")
                 st.write(f"Option tier: {c.option.get('quality_tier', 'standard')}")
+                if c.option.get("quote_warning"):
+                    st.warning(c.option["quote_warning"])
                 st.write(f"Hold: {c.holding_plan['suggested_hold']}")
                 st.write(f"Move source: {c.move_quality['source_type']}")
+                st.write(f"Premarket/open: {c.premarket_context['label']} ({c.premarket_context['gate']})")
                 st.write(f"Contract: {c.option['contract']}")
                 top_headline = c.headlines[0]["title"] if c.headlines else "No recent headline found"
                 st.caption(top_headline)
@@ -295,6 +309,7 @@ else:
         "Theme": ", ".join(c.advantage_profile["themes"]) or "—",
         "Small-account edge": f"{c.advantage_profile['label']} ({c.advantage_profile['score']}/100)",
         "Move source": c.move_quality["source_type"],
+        "Premarket/open": f"{c.premarket_context['label']} ({c.premarket_context['gate']})",
         "Suggested hold": c.holding_plan["suggested_hold"],
         "Affordable contract": c.option["contract"] if c.option else "None found",
         "Premium / max loss": f"${c.option['estimated_cost_and_max_loss']:.2f}" if c.option else "—",
@@ -328,6 +343,23 @@ else:
                     st.write(f"- {item}")
                 st.markdown("Verify before entry:")
                 for item in c.move_quality["verify"]:
+                    st.write(f"- {item}")
+                st.markdown("**Premarket vs open trap detector**")
+                pre = c.premarket_context
+                st.write(f"{pre['label']} - gate: **{pre['gate']}** - bias: **{pre['trade_bias']}**")
+                st.json({
+                    "confirmation window": pre["confirmation_window"],
+                    "premarket direction": pre["premarket_direction"],
+                    "premarket move %": pre["premarket_move_pct"],
+                    "premarket high": pre["premarket_high"],
+                    "premarket low": pre["premarket_low"],
+                    "open price": pre["open_price"],
+                    "current price": pre["current_price"],
+                    "vwap": pre["vwap"],
+                    "score": pre["score"],
+                })
+                st.write(pre["rule"])
+                for item in pre["verify"]:
                     st.write(f"- {item}")
                 st.markdown("**Small-account advantage**")
                 st.write(f"{c.advantage_profile['label']} — {c.advantage_profile['score']}/100")
@@ -394,6 +426,8 @@ else:
             st.subheader("Candidate contract")
             if c.option:
                 st.json(c.option)
+                if c.option.get("quote_warning"):
+                    st.warning(c.option["quote_warning"])
                 st.warning("Use a limit order. Recheck bid/ask, liquidity, news and the underlying chart immediately before entry.")
             else:
                 st.info("No sufficiently liquid near-the-money contract fit the configured premium-risk limit. Do not stretch the risk cap.")
@@ -403,6 +437,38 @@ else:
                 st.markdown(f"- [{headline['title']}]({headline['link']}) — {mood}")
                 if headline.get("summary"):
                     st.caption(headline["summary"])
+
+qualified_alternates = [
+    row for row in rejections
+    if "lower-ranked" in str(row.get("Why rejected", "")).lower()
+]
+if qualified_alternates:
+    st.subheader("Budget-qualified alternates Dave noticed")
+    st.caption(
+        "These names fit the account cap and had a usable contract estimate, but ranked below the selected 3 CALL / 3 PUT slate. "
+        "This is where ideas like MARA PUT or SOFI CALL can still show up for manual review."
+    )
+    alternate_frame = pd.DataFrame(qualified_alternates)
+    alternate_cols = [
+        "Symbol", "Direction", "Status", "Confidence", "Price",
+        "Premium / max loss", "Max allowed", "Why rejected", "Next move",
+    ]
+    alternate_cols = [col for col in alternate_cols if col in alternate_frame.columns]
+    st.dataframe(alternate_frame[alternate_cols].head(12), hide_index=True, use_container_width=True)
+
+if rejections:
+    with st.expander("Rejected / filtered stocks - why they missed", expanded=not candidates):
+        st.caption(
+            "This shows the stocks Dave checked but did not place in the main slate. "
+            "Most misses come from expensive contracts, no liquid option, weak evidence, or lower rank."
+        )
+        rejected_frame = pd.DataFrame(rejections)
+        preferred_cols = [
+            "Symbol", "Direction", "Status", "Confidence", "Price",
+            "Premium / max loss", "Max allowed", "Why rejected", "Next move",
+        ]
+        shown_cols = [col for col in preferred_cols if col in rejected_frame.columns]
+        st.dataframe(rejected_frame[shown_cols].head(40), hide_index=True, use_container_width=True)
 
 errors = st.session_state.get("errors", [])
 if errors:

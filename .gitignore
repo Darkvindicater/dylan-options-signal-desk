@@ -1,6 +1,8 @@
 .venv/
 __pycache__/
-.streamlit/
+.streamlit/secrets.toml
 *.pyc
 .pytest_cache/
 work/
+streamlit*.log
+*.log

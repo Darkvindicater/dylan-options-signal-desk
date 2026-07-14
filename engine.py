@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from typing import Any
 from urllib.parse import quote_plus
 
@@ -47,6 +47,7 @@ class Candidate:
     holding_plan: dict[str, Any]
     move_quality: dict[str, Any]
     advantage_profile: dict[str, Any]
+    premarket_context: dict[str, Any]
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -61,6 +62,8 @@ class SignalEngine:
         self._market_cache: dict[str, Any] | None = None
         self._spy_1mo_cache: pd.DataFrame | None = None
         self._nasdaq_rows: list[dict[str, Any]] = []
+        self.rejection_report: list[dict[str, Any]] = []
+        self._premarket_cache: dict[str, dict[str, Any]] = {}
 
     def enabled_theme_groups(self) -> dict[str, list[str]]:
         themes = self.config.get("theme_universes", {})
@@ -443,6 +446,211 @@ class SignalEngine:
             "volume_confirmed": volume_confirmed,
             "failed_breakout_up": failed_breakout_up,
             "failed_breakdown_down": failed_breakdown_down,
+        }
+
+    def premarket_open_context(self, symbol: str, direction: str) -> dict[str, Any]:
+        """Detect whether premarket direction confirms or traps after the regular open."""
+        if symbol in self._premarket_cache:
+            context = dict(self._premarket_cache[symbol])
+            context["fits_candidate_direction"] = context.get("trade_bias") == direction
+            context["gate"] = self.premarket_gate(context.get("trade_bias", "WAIT"), direction)
+            return context
+        try:
+            frame = yf.download(
+                symbol,
+                period="1d",
+                interval="5m",
+                prepost=True,
+                auto_adjust=True,
+                progress=False,
+            )
+            context = self.interpret_premarket_open(frame, direction)
+        except Exception as exc:
+            context = {
+                "label": "Premarket/open data unavailable",
+                "trade_bias": "WAIT",
+                "gate": "WAIT",
+                "score": 0,
+                "premarket_direction": "N/A",
+                "premarket_move_pct": None,
+                "premarket_high": None,
+                "premarket_low": None,
+                "open_price": None,
+                "current_price": None,
+                "vwap": None,
+                "confirmation_window": "9:45-10:30 ET",
+                "rule": "Use the chart manually; data feed did not return clean premarket/open bars.",
+                "verify": [f"Premarket/open check failed: {exc}"],
+            }
+        self._premarket_cache[symbol] = dict(context)
+        return context
+
+    @staticmethod
+    def premarket_gate(trade_bias: str, direction: str) -> str:
+        if trade_bias == "WAIT":
+            return "WAIT"
+        if trade_bias == direction:
+            return "CONFIRMED"
+        return "TRAP_AGAINST"
+
+    @staticmethod
+    def interpret_premarket_open(frame: pd.DataFrame, direction: str) -> dict[str, Any]:
+        if frame is None or frame.empty:
+            raise ValueError("No 5-minute premarket/open bars returned")
+        data = frame.copy()
+        index = pd.DatetimeIndex(data.index)
+        if index.tz is None:
+            index = index.tz_localize("UTC").tz_convert("America/New_York")
+        else:
+            index = index.tz_convert("America/New_York")
+        data.index = index
+
+        close = SignalEngine._series(data, "Close")
+        high = SignalEngine._series(data, "High") if "High" in data else close
+        low = SignalEngine._series(data, "Low") if "Low" in data else close
+        open_series = SignalEngine._series(data, "Open") if "Open" in data else close
+        volume = SignalEngine._series(data, "Volume") if "Volume" in data else pd.Series(1, index=close.index)
+        if close.empty:
+            raise ValueError("No clean close data in premarket/open bars")
+
+        latest_day = close.index[-1].date()
+        same_day = close.index.date == latest_day
+        times = pd.Series(close.index.time, index=close.index)
+        pre_mask = same_day & (times >= time(4, 0)) & (times < time(9, 30))
+        regular_mask = same_day & (times >= time(9, 30)) & (times <= time(16, 0))
+        pre_close = close.loc[pre_mask]
+        reg_close = close.loc[regular_mask]
+        if pre_close.empty:
+            return {
+                "label": "No premarket read",
+                "trade_bias": "WAIT",
+                "gate": "WAIT",
+                "score": 40,
+                "premarket_direction": "N/A",
+                "premarket_move_pct": None,
+                "premarket_high": None,
+                "premarket_low": None,
+                "open_price": round(float(open_series.loc[regular_mask].iloc[0]), 2) if not reg_close.empty else None,
+                "current_price": round(float(close.iloc[-1]), 2),
+                "vwap": None,
+                "confirmation_window": "9:45-10:30 ET",
+                "rule": "No usable premarket bars. Wait for regular-session structure and VWAP.",
+                "verify": ["Use the 9:45-10:30 confirmation window instead of guessing from missing premarket data."],
+            }
+
+        pre_open = float(pre_close.iloc[0])
+        pre_last = float(pre_close.iloc[-1])
+        pre_high = float(high.loc[pre_mask].max())
+        pre_low = float(low.loc[pre_mask].min())
+        pre_move = (pre_last / max(pre_open, 0.01) - 1) * 100
+        if pre_move >= 0.4:
+            pre_direction = "UP"
+        elif pre_move <= -0.4:
+            pre_direction = "DOWN"
+        else:
+            pre_direction = "FLAT"
+
+        if reg_close.empty:
+            return {
+                "label": "Premarket only - wait for open",
+                "trade_bias": "WAIT",
+                "gate": "WAIT",
+                "score": 45,
+                "premarket_direction": pre_direction,
+                "premarket_move_pct": round(pre_move, 2),
+                "premarket_high": round(pre_high, 2),
+                "premarket_low": round(pre_low, 2),
+                "open_price": None,
+                "current_price": round(pre_last, 2),
+                "vwap": None,
+                "confirmation_window": "9:45-10:30 ET",
+                "rule": "Premarket is not enough. Wait for the first 5-15 regular-market minutes.",
+                "verify": [
+                    "CALL only if price holds above premarket high/open VWAP after 9:45.",
+                    "PUT only if price loses premarket low/open VWAP after 9:45.",
+                ],
+            }
+
+        reg_open = float(open_series.loc[regular_mask].iloc[0])
+        current = float(reg_close.iloc[-1])
+        reg_volume = volume.loc[regular_mask].reindex(reg_close.index).fillna(0)
+        cumulative_volume = reg_volume.cumsum()
+        if cumulative_volume.iloc[-1] > 0:
+            vwap_series = (reg_close * reg_volume).cumsum() / cumulative_volume.replace(0, np.nan)
+            vwap = float(vwap_series.dropna().iloc[-1]) if not vwap_series.dropna().empty else reg_open
+        else:
+            vwap = reg_open
+        bars_since_open = len(reg_close)
+        after_first_15 = bars_since_open >= 3
+
+        label = "Wait for 9:45 confirmation"
+        trade_bias = "WAIT"
+        score = 50
+        rule = "First 5-15 minutes can trap. Wait for a 15-minute hold/rejection."
+        verify = [
+            "Watch whether price holds VWAP after the first 15 minutes.",
+            "Do not chase the first candle unless news and volume are exceptional.",
+        ]
+
+        if not after_first_15:
+            pass
+        elif pre_direction == "UP":
+            if current > pre_high and current >= vwap:
+                label = "Premarket up confirmed"
+                trade_bias = "CALL"
+                score = 82
+                rule = "Premarket strength held and broke/held above premarket high with VWAP support."
+                verify = ["CALL above premarket high/VWAP; invalidation is reclaim failure back under VWAP."]
+            elif current < reg_open and current < vwap:
+                label = "Premarket up fakeout"
+                trade_bias = "PUT"
+                score = 72
+                rule = "Premarket pop failed after the open and price is below open/VWAP."
+                verify = ["PUT only while price stays under VWAP/open; be careful if it reclaims premarket high."]
+        elif pre_direction == "DOWN":
+            if current < pre_low and current <= vwap:
+                label = "Premarket down confirmed"
+                trade_bias = "PUT"
+                score = 82
+                rule = "Premarket weakness held and price broke/held below premarket low with VWAP pressure."
+                verify = ["PUT below premarket low/VWAP; invalidation is reclaim back above VWAP."]
+            elif current > reg_open and current > vwap:
+                label = "Premarket down fakeout"
+                trade_bias = "CALL"
+                score = 72
+                rule = "Premarket selloff failed after the open and price reclaimed open/VWAP."
+                verify = ["CALL only while price holds VWAP/open; be careful if it loses premarket low."]
+        else:
+            if current > pre_high and current >= vwap:
+                label = "Opening range CALL break"
+                trade_bias = "CALL"
+                score = 74
+                rule = "Flat premarket turned into a regular-session upside break."
+                verify = ["CALL only above premarket high/VWAP with volume."]
+            elif current < pre_low and current <= vwap:
+                label = "Opening range PUT break"
+                trade_bias = "PUT"
+                score = 74
+                rule = "Flat premarket turned into a regular-session downside break."
+                verify = ["PUT only below premarket low/VWAP with volume."]
+
+        gate = SignalEngine.premarket_gate(trade_bias, direction)
+        return {
+            "label": label,
+            "trade_bias": trade_bias,
+            "gate": gate,
+            "score": score,
+            "premarket_direction": pre_direction,
+            "premarket_move_pct": round(pre_move, 2),
+            "premarket_high": round(pre_high, 2),
+            "premarket_low": round(pre_low, 2),
+            "open_price": round(reg_open, 2),
+            "current_price": round(current, 2),
+            "vwap": round(vwap, 2),
+            "confirmation_window": "9:45-10:30 ET",
+            "rule": rule,
+            "verify": verify,
+            "fits_candidate_direction": gate == "CONFIRMED",
         }
 
     def relative_strength(self, symbol_frame: pd.DataFrame, direction: str) -> tuple[bool, float]:
@@ -1021,7 +1229,7 @@ class SignalEngine:
         if setup_status == "TRADE SETUP":
             score += 15
             positives.append("Full TRADE SETUP passed the playbook gate.")
-        elif setup_status in {"WATCH", "MOVE WATCH", "PUT REVERSAL WATCH", "CALL REVERSAL WATCH"}:
+        elif setup_status in {"WATCH", "MOVE WATCH", "PUT REVERSAL WATCH", "CALL REVERSAL WATCH", "PUT FADE WATCH"}:
             score += 7
             positives.append(f"{setup_status} is worth studying, but it still needs entry confirmation.")
         elif setup_status == "STUDY ONLY":
@@ -1128,6 +1336,21 @@ class SignalEngine:
                 int(self.config.get("fallback_minimum_option_volume", 10)),
                 float(self.config.get("fallback_option_max_spread_pct", 0.45)),
             )
+        if liquid.empty and self.config.get("option_last_price_fallback", True):
+            quality_tier = "Robinhood quote check"
+            last_price_contracts = contracts[
+                (contracts["lastPrice"].fillna(0) > 0)
+                & (contracts["lastPrice"].fillna(0) * 100 <= max_cost)
+                & (contracts["lastPrice"].fillna(0) * 100 >= self.config["preferred_contract_min"])
+                & (contracts["distance"] <= float(self.config.get("fallback_option_max_distance", 0.08)))
+                & (contracts["openInterest"].fillna(0) >= int(self.config.get("fallback_minimum_open_interest", 50)))
+                & (contracts["volume"].fillna(0) >= int(self.config.get("fallback_minimum_option_volume", 10)))
+            ].copy()
+            if not last_price_contracts.empty:
+                last_price_contracts["spread_pct"] = 9.99
+                last_price_contracts["bid"] = last_price_contracts["bid"].fillna(0)
+                last_price_contracts["ask"] = last_price_contracts["lastPrice"]
+                liquid = last_price_contracts
         if liquid.empty:
             return None
         row = liquid.sort_values(["distance", "spread_pct"]).iloc[0]
@@ -1174,6 +1397,18 @@ class SignalEngine:
                 "Standard liquidity/near-money contract."
                 if quality_tier == "standard"
                 else "Budget fallback: contract fits the account cap, but liquidity, spread, or strike distance is weaker. Use extra caution."
+                if quality_tier == "budget fallback"
+                else "Robinhood quote check: the public feed showed 0.00 bid/ask, so this uses last traded price only. Verify live bid/ask and premium in Robinhood before entry."
+            ),
+            "quote_status": (
+                "live bid/ask"
+                if quality_tier in {"standard", "budget fallback"}
+                else "last trade estimate - verify in Robinhood"
+            ),
+            "quote_warning": (
+                ""
+                if quality_tier in {"standard", "budget fallback"}
+                else "Public options feed had 0.00 bid/ask; do not enter unless Robinhood shows a real tradable bid/ask and limit price."
             ),
             "estimated_delta": round(delta, 3),
             "estimated_gamma": round(gamma, 4),
@@ -1186,7 +1421,43 @@ class SignalEngine:
         if not candidate.option:
             return False
         max_cost = float(self.config["account_size"]) * float(self.config["max_risk_per_trade_pct"]) / 100
-        return float(candidate.option.get("estimated_cost_and_max_loss", math.inf)) <= max_cost
+        try:
+            return float(candidate.option.get("estimated_cost_and_max_loss", math.inf)) <= max_cost
+        except (TypeError, ValueError):
+            return False
+
+    def rejection_row(self, symbol: str, reason: str, candidate: Any | None = None) -> dict[str, Any]:
+        """Human-readable scan filter note for the Streamlit rejected-stocks table."""
+        max_cost = float(self.config.get("account_size", 0)) * float(self.config.get("max_risk_per_trade_pct", 0)) / 100
+        option = getattr(candidate, "option", None) if candidate else None
+        premium = None
+        if option:
+            try:
+                premium = float(option.get("estimated_cost_and_max_loss"))
+            except (TypeError, ValueError):
+                premium = None
+        if candidate is None:
+            next_move = "Keep on radar only if fresh news, volume, or a cleaner level appears."
+        elif not option:
+            next_move = "Do not force it; wait for a liquid contract that fits the account."
+        elif premium is not None and premium > max_cost:
+            next_move = "Too expensive for this account size; revisit after account grows or premium cools."
+        else:
+            next_move = "Qualified, but lower-ranked than the current CALL/PUT slate."
+        return {
+            "Symbol": symbol.upper().strip(),
+            "Direction": getattr(candidate, "direction", "N/A") if candidate else "N/A",
+            "Status": getattr(candidate, "setup_status", "No setup") if candidate else "No setup",
+            "Confidence": f"{getattr(candidate, 'confidence', 'N/A')}%" if candidate else "N/A",
+            "Price": (
+                f"${float(getattr(candidate, 'price')):.2f}"
+                if candidate is not None and getattr(candidate, "price", None) is not None else "N/A"
+            ),
+            "Premium / max loss": f"${premium:.2f}" if premium is not None else "None",
+            "Max allowed": f"${max_cost:.2f}",
+            "Why rejected": reason,
+            "Next move": next_move,
+        }
 
     @staticmethod
     def weinstein_stage(frame: pd.DataFrame) -> str:
@@ -1237,17 +1508,23 @@ class SignalEngine:
                       "failed_breakout_up": False, "failed_breakdown_down": False}
         daily_returns = self._series(frame, "Close").pct_change().dropna()
         one_day_return = float(daily_returns.iloc[-1])
+        previous_day_return = float(daily_returns.iloc[-2]) if len(daily_returns) >= 2 else 0.0
         recent_gap_up = float(daily_returns.tail(3).max())
         recent_gap_down = float(daily_returns.tail(3).min())
         overextended_up = recent_gap_up >= .08 or data["return_5d"] >= .15 or data["rsi14"] >= 80
         overextended_down = recent_gap_down <= -.08 or data["return_5d"] <= -.15 or data["rsi14"] <= 20
+        failed_pop_put_watch = darvas["breakout_direction"] == "NONE" and (
+            (previous_day_return >= .025 and one_day_return <= -.005)
+            or (recent_gap_up >= .08 and one_day_return < 0)
+        )
         reversal_watch = darvas["breakout_direction"] == "NONE" and (
             darvas.get("failed_breakout_up", False) or darvas.get("failed_breakdown_down", False)
         )
-        extended_watch = darvas["breakout_direction"] == "NONE" and not reversal_watch and (
+        extended_watch = darvas["breakout_direction"] == "NONE" and not reversal_watch and not failed_pop_put_watch and (
             overextended_up or overextended_down
         )
         direction = darvas["breakout_direction"] if darvas["breakout_direction"] != "NONE" else (
+            "PUT" if failed_pop_put_watch else
             "PUT" if darvas.get("failed_breakout_up", False) else
             "CALL" if darvas.get("failed_breakdown_down", False) else
             "CALL" if overextended_up else "PUT" if overextended_down else "CALL" if score > 0 else "PUT"
@@ -1263,6 +1540,7 @@ class SignalEngine:
         option = self.option_contract(symbol, direction, data["price"])
         earnings = self.earnings_date(symbol)
         move_quality = self.move_quality(direction, data, daily_returns, headlines, catalyst, earnings)
+        premarket_context = self.premarket_open_context(symbol, direction)
         catalysts = []
         risks = []
         if details["trend"] * score > 0:
@@ -1277,6 +1555,15 @@ class SignalEngine:
             catalysts.append(f"Source-of-move check: {move_quality['label']}.")
         else:
             risks.append(f"Source-of-move warning: {move_quality['label']}.")
+        if premarket_context["gate"] == "CONFIRMED":
+            catalysts.append(f"Premarket/open check supports the {direction}: {premarket_context['label']}.")
+        elif premarket_context["gate"] == "TRAP_AGAINST":
+            risks.append(
+                f"Premarket/open trap warning: {premarket_context['label']} points {premarket_context['trade_bias']}, "
+                f"against this {direction} idea."
+            )
+        else:
+            risks.append(f"Premarket/open check says wait: {premarket_context['label']}.")
         if abs(details["news_sentiment"]) < 0.2:
             risks.append("Headlines provide little directional confirmation.")
         if data["volume_ratio"] < 0.9:
@@ -1360,12 +1647,15 @@ class SignalEngine:
         ) else (
             "WATCH" if checklist_score >= 6 else "MOVE WATCH" if move_watch else "STUDY ONLY" if study_only else "SKIP"
         )
-        if reversal_watch:
+        if failed_pop_put_watch:
+            setup_status = "PUT FADE WATCH"
+        elif reversal_watch:
             setup_status = "PUT REVERSAL WATCH" if direction == "PUT" else "CALL REVERSAL WATCH"
         elif extended_watch:
             setup_status = "EXTENDED CALL WATCH" if direction == "CALL" else "EXTENDED PUT WATCH"
         bullish = direction == "CALL"
-        setup_type = (f"Move-source watch - {move_quality['source_type']}; not an approved entry" if setup_status == "MOVE WATCH" else
+        setup_type = ("Failed pop / bounce-fade PUT watch - wait for rejection confirmation" if failed_pop_put_watch else
+            f"Move-source watch - {move_quality['source_type']}; not an approved entry" if setup_status == "MOVE WATCH" else
             "Study only - has a theme, move, or catalyst clue, but not enough confirmation for entry" if setup_status == "STUDY ONLY" else
             "Reversal watch - failed level, but not approved until confirmation" if reversal_watch else
             "Extended continuation watch - wait for a base, hold, or retest; do not chase" if extended_watch else
@@ -1379,13 +1669,19 @@ class SignalEngine:
             f"Price is {'above' if data['price'] > data['sma50'] else 'below'} its 50-day average, "
             f"with RSI {data['rsi14']:.1f} and 5-day return {data['return_5d']:.1%}. "
             f"Weinstein classification: {stage}. Market: {market_text}. "
-            f"Move source: {move_quality['label']} ({move_quality['score']}/100)."
+            f"Move source: {move_quality['label']} ({move_quality['score']}/100). "
+            f"Premarket/open: {premarket_context['label']} ({premarket_context['gate']})."
         )
         if reversal_watch:
             thesis += (
                 f" The prior move is overextended ({one_day_return:+.1%} one day, "
                 f"{data['return_5d']:+.1%} five days), so the app is watching the opposite direction; "
                 "this is observation only until price confirms reversal."
+            )
+        elif failed_pop_put_watch:
+            thesis += (
+                f" The stock had a prior pop of {previous_day_return:+.1%} and is now fading {one_day_return:+.1%}. "
+                "That is a failed-bounce pattern, so Dave is watching a PUT only if price rejects the failed-pop area with confirmation."
             )
         elif extended_watch:
             thesis += (
@@ -1411,11 +1707,13 @@ class SignalEngine:
                          entry, invalidation, target, earnings, option, details, headlines,
                          setup_status, checklist, darvas, company, catalyst, setup_type, stage,
                          market_text, a_plus_score, reversal_watch, extended_watch,
-                         self.explain_catalyst(catalyst), holding_plan, move_quality, advantage_profile)
+                         self.explain_catalyst(catalyst), holding_plan, move_quality, advantage_profile,
+                         premarket_context)
 
     def scan(self) -> tuple[list[Candidate], list[str]]:
         candidates: list[Candidate] = []
         errors: list[str] = []
+        self.rejection_report = []
         symbols = self.discover_symbols() if self.config.get("automatic_discovery", False) else self.config["watchlist"]
         symbols = list(dict.fromkeys(symbol.upper().strip() for symbol in symbols if symbol))
         symbols = symbols[: max(1, int(self.config.get("max_symbols_to_analyze", len(symbols))))]
@@ -1428,23 +1726,51 @@ class SignalEngine:
                 candidate = self.analyze(symbol.upper().strip())
                 # WATCH names may be surfaced without a contract so catalyst
                 # stocks are visible before the entry and option gates are ready.
-                if candidate and candidate.setup_status != "SKIP":
-                    candidates.append(candidate)
-                    if self.config.get("budget_qualified_main_list", True) and self.candidate_fits_budget(candidate):
+                if candidate is None:
+                    self.rejection_report.append(self.rejection_row(
+                        symbol,
+                        "Below watch threshold or missing enough price/news/evidence for a clean setup.",
+                    ))
+                    continue
+                if candidate.setup_status == "SKIP":
+                    self.rejection_report.append(self.rejection_row(
+                        symbol,
+                        "Skipped because the playbook did not find enough theme, catalyst, move, or structure.",
+                        candidate,
+                    ))
+                    continue
+                candidates.append(candidate)
+                if self.config.get("budget_qualified_main_list", True):
+                    budget_ok = self.candidate_fits_budget(candidate)
+                    if budget_ok:
                         if candidate.direction == "CALL":
                             budget_calls_found += 1
                         elif candidate.direction == "PUT":
                             budget_puts_found += 1
-                    if (
-                        self.config.get("budget_qualified_main_list", True)
-                        and self.config.get("stop_after_budget_slate_filled", True)
-                        and budget_calls_found >= call_target
-                        and budget_puts_found >= put_target
-                    ):
-                        break
+                    else:
+                        option = candidate.option
+                        if option:
+                            try:
+                                premium = float(option.get("estimated_cost_and_max_loss", math.inf))
+                            except (TypeError, ValueError):
+                                premium = math.inf
+                            max_cost = float(self.config["account_size"]) * float(self.config["max_risk_per_trade_pct"]) / 100
+                            reason = f"Option max loss ${premium:.2f} is above the account cap ${max_cost:.2f}."
+                        else:
+                            reason = "No liquid near-the-money contract fit the DTE/liquidity/risk rules."
+                        self.rejection_report.append(self.rejection_row(symbol, reason, candidate))
+                if (
+                    self.config.get("budget_qualified_main_list", True)
+                    and self.config.get("stop_after_budget_slate_filled", True)
+                    and budget_calls_found >= call_target
+                    and budget_puts_found >= put_target
+                ):
+                    break
             except Exception as exc:
                 errors.append(f"{symbol}: {exc}")
+                self.rejection_report.append(self.rejection_row(symbol, f"Data-source error: {exc}"))
         status_rank = {"TRADE SETUP": 4, "PUT REVERSAL WATCH": 3, "CALL REVERSAL WATCH": 3,
+                       "PUT FADE WATCH": 3,
                        "EXTENDED CALL WATCH": 2, "EXTENDED PUT WATCH": 2, "MOVE WATCH": 2,
                        "WATCH": 1, "STUDY ONLY": 1, "SKIP": 0}
         candidates.sort(
@@ -1461,6 +1787,14 @@ class SignalEngine:
             main_pool = [item for item in candidates if self.candidate_fits_budget(item)]
         calls = [item for item in main_pool if item.direction == "CALL"][:call_target]
         puts = [item for item in main_pool if item.direction == "PUT"][:put_target]
+        selected_ids = {id(item) for item in [*calls, *puts]}
+        for item in main_pool:
+            if id(item) not in selected_ids:
+                self.rejection_report.append(self.rejection_row(
+                    item.symbol,
+                    "Budget-qualified, but lower-ranked than the selected 3 CALL / 3 PUT slate.",
+                    item,
+                ))
         if self.config.get("budget_qualified_main_list", True) and (len(calls) < call_target or len(puts) < put_target):
             errors.append(
                 f"Budget filter found {len(calls)}/{call_target} CALL and {len(puts)}/{put_target} PUT names. "
