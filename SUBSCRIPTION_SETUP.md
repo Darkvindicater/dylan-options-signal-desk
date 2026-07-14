@@ -8,7 +8,8 @@ The app now supports a simple paid-membership gate.
 - Optional subscription mode.
 - A `$24.99/month` membership page.
 - A Stripe payment button when you add a Stripe Payment Link.
-- A private member access-code check using Streamlit secrets.
+- Automatic Stripe return unlock after a paid checkout.
+- A private member access-code check using Streamlit secrets as a backup.
 - Share-safe link behavior: if someone shares the app URL, the new visitor still sees the agreement and paywall first.
 
 ## Turn on $24.99/month payments
@@ -30,20 +31,53 @@ ACCESS_CODES = ""
 ROTATING_ACCESS_SECRET = "a-long-random-private-secret"
 ROTATING_ACCESS_PERIOD = "monthly"
 ROTATING_ACCESS_GRACE_PERIODS = "0"
+STRIPE_SECRET_KEY = "sk_live_your_private_stripe_secret_key"
 SUPPORT_EMAIL = "your_support_email@example.com"
 ```
 
 9. Save secrets and reboot the app if Streamlit does not restart automatically.
 
-## How to use access codes
+## Automatic unlock after payment
 
-The simple rotating-code version is still manual after payment, but the code refreshes automatically by billing period:
+This is the no-manual-sending setup.
+
+1. In Stripe, open your Payment Link.
+2. Find the setting for what happens after payment.
+3. Choose redirect customers back to your own website.
+4. Use this redirect URL:
+
+```text
+https://dylan-dave-options-desk.streamlit.app/?session_id={CHECKOUT_SESSION_ID}
+```
+
+5. In Streamlit secrets, add your private Stripe secret key:
+
+```toml
+STRIPE_SECRET_KEY = "sk_live_your_private_stripe_secret_key"
+```
+
+When a customer pays, Stripe sends them back to the app with their Checkout Session ID. The app verifies that session with Stripe, unlocks their browser, and shows them their current monthly member code so they can save it.
+
+Never commit or share `STRIPE_SECRET_KEY`.
+
+Optional tighter guardrails:
+
+```toml
+STRIPE_ALLOWED_PAYMENT_LINK_ID = "plink_your_payment_link_id"
+STRIPE_EXPECTED_AMOUNT_CENTS = "2499"
+```
+
+These are optional. They prevent another paid checkout session from the same Stripe account from unlocking this app by accident.
+
+## Backup access codes
+
+The rotating-code version is still available as a backup. The code refreshes automatically by billing period:
 
 1. Customer pays through Stripe.
-2. You confirm payment in Stripe.
-3. You generate their monthly code using their subscriber email.
-4. You send them that email-specific monthly code.
-5. Next month, the old monthly code stops working and you generate the new one after renewal.
+2. The app should unlock automatically after Stripe redirects them back.
+3. If automatic unlock fails, you can generate their monthly code using their subscriber email.
+4. Send them that email-specific monthly code.
+5. Next month, the old monthly code stops working and the app generates a new one after successful payment return.
 
 Generate a code locally:
 
@@ -65,7 +99,7 @@ Sharing the app link does **not** unlock the app for someone else because Stream
 - Keep `ROTATING_ACCESS_SECRET` private and never commit it to GitHub.
 - Tell subscribers not to share codes in the membership terms.
 
-This is easy to launch but not fully automated. For a bigger business, upgrade later to Stripe Checkout + webhooks + a subscriber database so access is tied to a paid Stripe customer instead of a manual code.
+This setup removes the normal manual code-sending step. For a bigger business, upgrade later to Stripe webhooks + a subscriber database so access can stay synced automatically when a card fails, a subscription is canceled, or a refund happens.
 
 ## Legal note
 

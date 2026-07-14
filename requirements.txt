@@ -6,3 +6,4 @@ feedparser>=6.0
 vaderSentiment>=3.3.2
 plotly>=5.22
 requests>=2.31
+stripe>=11.0

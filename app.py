@@ -136,6 +136,136 @@ def rotating_access_code_is_valid(email: str, submitted_code: str) -> bool:
     return False
 
 
+def first_query_value(*names: str) -> str:
+    """Return the first non-empty Streamlit query-param value for any name."""
+    for name in names:
+        try:
+            value = st.query_params.get(name, "")
+        except Exception:
+            value = ""
+        if isinstance(value, list):
+            value = value[0] if value else ""
+        value = str(value).strip()
+        if value:
+            return value
+    return ""
+
+
+def stripe_object_value(obj: object, key: str, default: object = None) -> object:
+    """Read values from Stripe objects whether they behave like dicts or objects."""
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def stripe_checkout_email(session: object) -> str:
+    customer_details = stripe_object_value(session, "customer_details")
+    customer = stripe_object_value(session, "customer")
+    return str(
+        stripe_object_value(customer_details, "email")
+        or stripe_object_value(session, "customer_email")
+        or stripe_object_value(customer, "email")
+        or ""
+    ).strip()
+
+
+def stripe_checkout_is_paid(session: object) -> bool:
+    status = str(stripe_object_value(session, "status", "")).lower()
+    payment_status = str(stripe_object_value(session, "payment_status", "")).lower()
+    subscription = stripe_object_value(session, "subscription")
+    subscription_status = str(stripe_object_value(subscription, "status", "")).lower()
+
+    return status == "complete" and (
+        payment_status == "paid"
+        or subscription_status in {"active", "trialing"}
+    )
+
+
+def stripe_checkout_matches_guardrails(session: object) -> tuple[bool, str]:
+    """Optional extra checks so another Stripe product cannot unlock the app by accident."""
+    allowed_payment_link = str(secret_value("STRIPE_ALLOWED_PAYMENT_LINK_ID", "")).strip()
+    if allowed_payment_link:
+        session_payment_link = str(stripe_object_value(session, "payment_link", "")).strip()
+        if session_payment_link and session_payment_link != allowed_payment_link:
+            return False, "That Stripe payment was not for Dylan Dave Options Desk."
+
+    expected_amount_raw = str(secret_value("STRIPE_EXPECTED_AMOUNT_CENTS", "")).strip()
+    if expected_amount_raw:
+        try:
+            expected_amount = int(expected_amount_raw)
+        except ValueError:
+            expected_amount = 0
+        amount_total = stripe_object_value(session, "amount_total", None)
+        if expected_amount and amount_total is not None and int(amount_total) != expected_amount:
+            return False, "That Stripe payment amount does not match this membership."
+
+    return True, ""
+
+
+def verify_stripe_checkout_session(session_id: str) -> tuple[bool, str, str]:
+    """Verify a Stripe Checkout/Payment Link return and return (ok, email, message)."""
+    stripe_secret_key = str(secret_value("STRIPE_SECRET_KEY", "")).strip()
+    if not stripe_secret_key:
+        return (
+            False,
+            "",
+            "Payment returned from Stripe, but automatic unlock is not configured yet. "
+            "Add STRIPE_SECRET_KEY in Streamlit secrets.",
+        )
+
+    try:
+        import stripe  # type: ignore
+    except Exception:
+        return (
+            False,
+            "",
+            "Payment returned from Stripe, but the Stripe package is not installed yet. "
+            "Redeploy after requirements.txt updates.",
+        )
+
+    try:
+        stripe.api_key = stripe_secret_key
+        session = stripe.checkout.Session.retrieve(
+            session_id,
+            expand=["customer", "subscription"],
+        )
+    except Exception as exc:
+        return False, "", f"Stripe could not verify this payment yet: {exc}"
+
+    if not stripe_checkout_is_paid(session):
+        return False, "", "Stripe did not confirm a completed paid subscription for this checkout session."
+
+    guardrail_ok, guardrail_message = stripe_checkout_matches_guardrails(session)
+    if not guardrail_ok:
+        return False, "", guardrail_message
+
+    email = stripe_checkout_email(session)
+    if not email:
+        return False, "", "Stripe verified payment, but no subscriber email came back from checkout."
+
+    return True, email, "Payment verified by Stripe. Member access unlocked."
+
+
+def current_member_code_for_email(email: str) -> tuple[str, str]:
+    secret = str(secret_value("ROTATING_ACCESS_SECRET", "")).strip()
+    if not secret or not email.strip():
+        return "", ""
+    period = str(secret_value("ROTATING_ACCESS_PERIOD", "monthly")).strip().lower()
+    period_key = rotating_period_keys(period, 0)[0]
+    return rotating_member_code(email, secret, period_key), period_key
+
+
+def clear_payment_query_params() -> None:
+    try:
+        for name in ("session_id", "checkout_session_id", "stripe_session_id"):
+            if name in st.query_params:
+                del st.query_params[name]
+    except Exception:
+        pass
+
+
 def require_user_agreement() -> None:
     if st.session_state.get("accepted_terms_version") == USER_AGREEMENT_VERSION:
         return
@@ -179,8 +309,31 @@ def require_subscription_if_enabled() -> None:
     if not subscription_enabled:
         return
 
+    checkout_session_id = first_query_value("session_id", "checkout_session_id", "stripe_session_id")
+    if checkout_session_id and not st.session_state.get("subscriber_access_granted"):
+        verified, email, message = verify_stripe_checkout_session(checkout_session_id)
+        if verified:
+            st.session_state["subscriber_access_granted"] = True
+            st.session_state["subscriber_email"] = email
+            st.session_state["stripe_unlock_message"] = message
+            member_code, period_key = current_member_code_for_email(email)
+            if member_code:
+                st.session_state["subscriber_current_code"] = member_code
+                st.session_state["subscriber_current_period"] = period_key
+            clear_payment_query_params()
+            st.rerun()
+        else:
+            st.warning(message)
+
     if st.session_state.get("subscriber_access_granted"):
         st.sidebar.success("Member access active for this browser session")
+        if st.session_state.get("stripe_unlock_message"):
+            st.sidebar.success(str(st.session_state.pop("stripe_unlock_message")))
+        member_code = st.session_state.get("subscriber_current_code")
+        member_period = st.session_state.get("subscriber_current_period")
+        if member_code:
+            st.sidebar.caption(f"Save this member code for {member_period}:")
+            st.sidebar.code(str(member_code), language="text")
         return
 
     price_label = str(secret_value("SUBSCRIPTION_PRICE_LABEL", "$24.99/month")).strip() or "$24.99/month"
@@ -193,8 +346,8 @@ def require_subscription_if_enabled() -> None:
         "they subscribe or enter their own member access code."
     )
     st.info(
-        "Unpaid visitors see this membership page first. Paid members can unlock the scanner "
-        "with a private access code after payment."
+        "Unpaid visitors see this membership page first. After payment, Stripe can send them "
+        "back here and unlock the scanner automatically. The private code box stays here as a backup."
     )
 
     if stripe_payment_link:
