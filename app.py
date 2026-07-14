@@ -13,7 +13,7 @@ from engine import SignalEngine
 
 ROOT = Path(__file__).parent
 APP_STATE_VERSION = 21
-USER_AGREEMENT_VERSION = "2026-07-14"
+USER_AGREEMENT_VERSION = "2026-07-14-v2"
 CANDIDATE_SCHEMA_FIELDS = (
     "setup_status", "checklist", "darvas", "company", "catalyst",
     "setup_type", "a_plus_score", "reversal_watch", "extended_watch",
@@ -31,20 +31,31 @@ USER_AGREEMENT_TEXT = """
 
 Last updated: July 14, 2026
 
-By using this dashboard, you agree to the following terms:
+By accessing or using Dylan Dave Options Desk ("the Platform"), you confirm that you are at least 18 years old, have read this agreement, understand it, and voluntarily agree to its terms. If you do not agree, you must not use the Platform.
 
-1. **Educational decision support only.** Dylan Dave Options Desk is a research and education tool. It is not a brokerage, investment adviser, financial adviser, legal adviser, tax adviser, or fiduciary.
+1. **Educational purposes only.** The Platform provides general market information, research tools, calculations, and educational content. It is not a brokerage, registered investment adviser, financial adviser, commodity trading adviser, legal adviser, tax adviser, or fiduciary. Nothing provided by the Platform constitutes personalized financial, investment, legal, or tax advice.
+
 2. **Not registered or regulator-approved.** Dylan Dave Options Desk and its creator are not presented as SEC-registered, state-registered, FINRA-registered, broker-dealer approved, investment-adviser approved, or otherwise approved by any financial regulator. No regulator has reviewed, endorsed, or approved the app's signals, scoring, watchlists, or educational content.
-3. **No personalized financial advice.** The app does not know your full financial situation, risk tolerance, objectives, debts, income, obligations, or suitability. Nothing shown is a recommendation that you personally buy, sell, hold, or short any stock or option.
+
+3. **No recommendations or trade instructions.** Stock names, option contracts, market observations, alerts, scores, rankings, examples, watchlists, or other Platform outputs are presented for informational and educational purposes only. Nothing displayed should be interpreted as an instruction, solicitation, endorsement, or recommendation to buy, sell, hold, or short any security or option. The Platform does not evaluate your financial condition, experience, debts, income, objectives, risk tolerance, or whether a particular trade is suitable for you.
+
 4. **Do your own research.** You must do your own independent research and due diligence before making any financial decision. Do not rely only on the app, a social-media post, a headline, or another user's result.
-5. **Options are high risk.** Long options can lose 100% of premium. Short-dated contracts can lose value quickly from price movement, volatility changes, bid/ask spread, and time decay.
-6. **Data may be wrong or delayed.** Public market data, news feeds, earnings dates, option chains, Greeks, sentiment scores, confidence scores, and app calculations may be incomplete, delayed, inaccurate, or unavailable.
-7. **You are responsible for every trade.** You must verify all prices, option contracts, bid/ask spreads, liquidity, earnings dates, news, and brokerage tradability before entering any order. You alone decide whether to trade.
-8. **No guarantee of profit.** The app does not promise wins, income, daily profit, account growth, or any specific result. A high confidence score is not a probability of winning.
-9. **No liability for losses.** To the fullest extent permitted by law, you agree that Dylan Dave Options Desk, its creator, operators, and contributors are not responsible for trading losses, missed opportunities, data errors, platform outages, or decisions you make after using the app.
-10. **Hold harmless.** To the fullest extent permitted by law, you agree not to sue or bring claims against the creator or operators for losses connected to your use of the app, your interpretation of app output, or any trade you place.
-11. **No emergency or professional service.** For financial, legal, tax, or investment advice, consult a qualified professional. You may independently check investment-professional registration through official tools such as SEC/Investor.gov IAPD and FINRA BrokerCheck.
-12. **Acceptance.** If you do not agree, do not use the app.
+
+5. **Options involve substantial risk.** Options trading is speculative and can result in significant financial loss. A purchased option may lose 100% of its premium. Certain option-selling strategies may expose traders to losses exceeding the premium received and, in some cases, potentially unlimited losses. Short-dated options can lose value rapidly because of price movement, time decay, changes in implied volatility, liquidity, and bid-ask spreads. Past performance, examples, simulations, and hypothetical results do not guarantee future performance. Only trade with money you can afford to lose.
+
+6. **No guarantee of accuracy or results.** Market data, prices, news, earnings dates, option chains, Greeks, volatility measurements, sentiment indicators, scores, calculations, and other information may be delayed, incomplete, inaccurate, unavailable, or affected by technical errors. Any "confidence," "opportunity," or similar score is an analytical estimate, not a guaranteed probability of success. The Platform makes no promise or guarantee regarding profits, winning trades, income, account growth, accuracy, availability, or any particular outcome.
+
+7. **Independent verification required.** Before making any decision, you are responsible for independently verifying all information through your broker and other reliable sources, including the ticker, strike price, expiration date, option type, current price, bid-ask spread, volume, open interest, earnings dates, company announcements, relevant news, contract liquidity, brokerage availability, order details, maximum possible loss, and your ability to accept that loss. You are solely responsible for reviewing and approving every order before submitting it.
+
+8. **Assumption of risk.** You voluntarily assume all risks arising from your use of the Platform and from any investment or trading decision you make. You understand that you, not the Platform, its creator, operators, contributors, data providers, or affiliates, are solely responsible for your trades, decisions, profits, losses, taxes, and financial consequences.
+
+9. **Limitation of liability.** To the fullest extent permitted by applicable law, Dylan Dave Options Desk and its creator, operators, contributors, affiliates, and data providers will not be liable for trading losses, lost profits, missed opportunities, incorrect or delayed information, technical failures, service interruptions, reliance on Platform content, or decisions made using the Platform. Nothing in this agreement excludes liability that cannot legally be excluded, including liability resulting from fraud, intentional misconduct, or other legally non-waivable conduct.
+
+10. **No professional relationship.** Using the Platform does not create an adviser-client, broker-client, fiduciary, attorney-client, partnership, employment, or other professional relationship. For personalized financial, investment, legal, or tax advice, consult an appropriately licensed professional. You may independently check investment-professional registration through official tools such as SEC/Investor.gov IAPD and FINRA BrokerCheck.
+
+11. **Final acknowledgment.** By selecting "I Understand and Agree" or continuing to use the Platform, you acknowledge that you have read and understood this agreement, the Platform provides educational information and not personalized advice, options trading may result in the loss of your entire investment, you are solely responsible for every trading decision you make, and no profit or investment result has been promised or guaranteed.
+
+12. **Social media and marketing disclaimer.** Any short-form or social-media content connected to the Platform should be treated as educational content only, not personalized financial advice or a recommendation to trade. Options involve substantial risk, including the possible loss of 100% of your investment. Results are not guaranteed. Conduct your own research and consult a licensed professional. Avoid language such as "guaranteed profit," "can't lose," "easy money," or presenting a confidence score as a true win probability.
 
 This agreement is a practical protective notice, not a substitute for attorney-drafted Terms of Service. If this app becomes a real paid business, have a licensed attorney review it.
 """
@@ -86,10 +97,10 @@ def require_user_agreement() -> None:
 
     signer_name = st.text_input("Type your full name to accept", key="agreement_name")
     accepted = st.checkbox(
-        "I have read and agree to the Dylan Dave Options Desk User Agreement.",
+        "I am at least 18 years old. I have read and accept the Risk Disclosure and User Agreement, understand that options trading can result in substantial losses, and accept full responsibility for my decisions.",
         key="agreement_checkbox",
     )
-    if st.button("I agree and enter the app", type="primary", use_container_width=True):
+    if st.button("I Understand and Agree", type="primary", use_container_width=True):
         if not signer_name.strip() or not accepted:
             st.error("Type your name and check the agreement box before entering.")
         else:
