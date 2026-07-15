@@ -5,6 +5,7 @@ import hmac
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -266,6 +267,26 @@ def clear_payment_query_params() -> None:
         pass
 
 
+def stripe_payment_link_for_customer(payment_link: str) -> str:
+    """Add optional safe customer-facing Stripe URL parameters."""
+    promo_code = str(secret_value("STRIPE_PREFILLED_PROMO_CODE", "")).strip()
+    if not payment_link or not promo_code:
+        return payment_link
+
+    parsed = urlsplit(payment_link)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["prefilled_promo_code"] = promo_code
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urlencode(query),
+            parsed.fragment,
+        )
+    )
+
+
 def require_user_agreement() -> None:
     if st.session_state.get("accepted_terms_version") == USER_AGREEMENT_VERSION:
         return
@@ -351,12 +372,23 @@ def require_subscription_if_enabled() -> None:
     )
 
     if stripe_payment_link:
-        st.link_button(f"Subscribe for {price_label}", stripe_payment_link, use_container_width=True)
+        st.link_button(
+            f"Subscribe for {price_label}",
+            stripe_payment_link_for_customer(stripe_payment_link),
+            use_container_width=True,
+        )
+        if str(secret_value("STRIPE_PREFILLED_PROMO_CODE", "")).strip():
+            st.caption("A Stripe promo code is prefilled at checkout when Stripe allows that code.")
     else:
         st.info(
             "Subscription checkout is ready, but Stripe is not connected yet. "
             "Add STRIPE_PAYMENT_LINK in Streamlit secrets so unpaid visitors can pay."
         )
+
+    st.caption(
+        "Stripe promo codes are discount codes created in Stripe. The member access code below "
+        "is only a backup app-unlock code after payment."
+    )
 
     with st.form("member_access_form"):
         email = st.text_input("Subscriber email")

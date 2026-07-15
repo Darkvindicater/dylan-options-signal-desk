@@ -32,6 +32,7 @@ ROTATING_ACCESS_SECRET = "a-long-random-private-secret"
 ROTATING_ACCESS_PERIOD = "monthly"
 ROTATING_ACCESS_GRACE_PERIODS = "0"
 STRIPE_SECRET_KEY = "sk_live_your_private_stripe_secret_key"
+STRIPE_PREFILLED_PROMO_CODE = ""
 SUPPORT_EMAIL = "your_support_email@example.com"
 ```
 
@@ -68,6 +69,24 @@ STRIPE_EXPECTED_AMOUNT_CENTS = "2499"
 ```
 
 These are optional. They prevent another paid checkout session from the same Stripe account from unlocking this app by accident.
+
+## Promo codes
+
+Stripe promo codes are discount codes, not app access codes.
+
+If you want the Subscribe button to prefill a Stripe promo code automatically, create an active coupon/promotion code in Stripe and then add this in Streamlit secrets:
+
+```toml
+STRIPE_PREFILLED_PROMO_CODE = "YOURCODE"
+```
+
+If a promo code does not work at checkout, check Stripe first:
+
+- The Payment Link must allow promotion codes.
+- The code must be an active Stripe **promotion code**, not only a coupon.
+- The code must apply to the subscription/product being sold.
+- The code cannot be expired, over its redemption limit, restricted to another customer, or blocked by a first-time-order rule.
+- App member codes such as `DD-202607-XXXX-XXXX` are not Stripe promo codes.
 
 ## Backup access codes
 
