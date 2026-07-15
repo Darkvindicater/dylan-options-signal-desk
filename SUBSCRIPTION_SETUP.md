@@ -11,6 +11,7 @@ The app now supports a simple paid-membership gate.
 - Automatic Stripe return unlock after a paid checkout.
 - A private member access-code check using Streamlit secrets as a backup.
 - A signed member pass after one successful unlock so customers do not type the code every time.
+- Optional automatic email delivery of the member link/code when email secrets are configured.
 - Share-safe plain-link behavior: if someone shares the plain app URL, the new visitor still sees the agreement and paywall first.
 
 ## Turn on $24.99/month payments
@@ -35,6 +36,9 @@ ROTATING_ACCESS_GRACE_PERIODS = "0"
 STRIPE_SECRET_KEY = "sk_live_your_private_stripe_secret_key"
 STRIPE_PREFILLED_PROMO_CODE = ""
 MEMBER_PASS_DAYS = "35"
+APP_PUBLIC_URL = "https://dylan-dave-options-desk.streamlit.app"
+RESEND_API_KEY = ""
+MEMBER_EMAIL_FROM = "Dylan Dave Options Desk <your_verified_sender@example.com>"
 SUPPORT_EMAIL = "your_support_email@example.com"
 ```
 
@@ -60,6 +64,8 @@ STRIPE_SECRET_KEY = "sk_live_your_private_stripe_secret_key"
 ```
 
 When a customer pays, Stripe sends them back to the app with their Checkout Session ID. The app verifies that session with Stripe, unlocks their browser, creates a signed member pass, and shows them their current monthly member code as a backup.
+
+If email sending is configured with `RESEND_API_KEY` or SMTP settings, the app also emails the customer their one-click access link and backup code when they unlock.
 
 Never commit or share `STRIPE_SECRET_KEY`.
 
@@ -125,6 +131,20 @@ Sharing the plain app link does **not** unlock the app for someone else because 
 - Tell subscribers not to share codes in the membership terms.
 
 This setup removes repeated code entry for the same browser. For a bigger business, upgrade later to Stripe webhooks + a subscriber database so access can stay synced automatically when a card fails, a subscription is canceled, or a refund happens.
+
+## Automatic email when Stripe detects payment
+
+For the strongest setup, use the included webhook service:
+
+```text
+stripe_webhook_emailer.py
+```
+
+That service lets Stripe send the email immediately after checkout, even if the customer closes the browser before returning to the app. See:
+
+```text
+WEBHOOK_EMAIL_SETUP.md
+```
 
 ## Legal note
 

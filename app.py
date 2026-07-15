@@ -4,12 +4,16 @@ import base64
 import hashlib
 import hmac
 import json
+import smtplib
+import ssl
+from email.message import EmailMessage
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import pandas as pd
 import plotly.graph_objects as go
+import requests
 import streamlit as st
 
 from engine import SignalEngine
@@ -241,6 +245,7 @@ def grant_member_access(email: str, source_message: str = "Member access active.
             st.query_params[MEMBER_PASS_QUERY_PARAM] = member_pass
         except Exception:
             pass
+        maybe_send_member_access_email(email, member_code, period_key, member_pass)
 
 
 def first_query_value(*names: str) -> str:
@@ -364,6 +369,160 @@ def current_member_code_for_email(email: str) -> tuple[str, str]:
     return rotating_member_code(email, secret, period_key), period_key
 
 
+def app_public_url() -> str:
+    configured_url = str(secret_value("APP_PUBLIC_URL", "https://dylan-dave-options-desk.streamlit.app/")).strip()
+    return configured_url.rstrip("/") or "https://dylan-dave-options-desk.streamlit.app"
+
+
+def member_pass_access_url(member_pass: str) -> str:
+    base_url = app_public_url()
+    separator = "&" if "?" in base_url else "?"
+    return f"{base_url}{separator}{urlencode({MEMBER_PASS_QUERY_PARAM: member_pass})}"
+
+
+def member_email_sending_enabled() -> bool:
+    if secret_bool("MEMBER_EMAILS_ENABLED", False):
+        return True
+    return bool(
+        str(secret_value("RESEND_API_KEY", "")).strip()
+        or str(secret_value("SMTP_HOST", "")).strip()
+    )
+
+
+def build_member_access_email(email: str, code: str, period_key: str, access_url: str) -> tuple[str, str, str]:
+    price_label = str(secret_value("SUBSCRIPTION_PRICE_LABEL", "$24.99/month")).strip() or "$24.99/month"
+    support_email = str(secret_value("SUPPORT_EMAIL", "")).strip()
+    subject = "Your Dylan Dave Options Desk member access"
+    text = (
+        "Welcome to Dylan Dave Options Desk.\n\n"
+        f"Subscription: {price_label}\n"
+        f"Subscriber email: {email}\n\n"
+        "Your one-click member access link:\n"
+        f"{access_url}\n\n"
+        "Backup member code:\n"
+        f"{code}\n\n"
+        f"Code period: {period_key}\n\n"
+        "Use the access link or enter your subscriber email and backup code one time. "
+        "After it unlocks, bookmark the unlocked page. Do not share your access link or code.\n\n"
+        "Safety note: Dylan Dave Options Desk is educational only, not financial advice. "
+        "Options are risky and you are responsible for your own decisions.\n"
+    )
+    if support_email:
+        text += f"\nSupport: {support_email}\n"
+
+    html = f"""
+    <div style="font-family: Arial, sans-serif; line-height: 1.55; color: #111827;">
+      <h2>Your Dylan Dave Options Desk access is ready</h2>
+      <p>Welcome, <strong>{email}</strong>.</p>
+      <p><a href="{access_url}" style="background:#4f46e5;color:white;padding:12px 18px;border-radius:8px;text-decoration:none;display:inline-block;">Open member desk</a></p>
+      <p>If the button does not work, copy this link:</p>
+      <p style="word-break:break-all;">{access_url}</p>
+      <p><strong>Backup member code:</strong></p>
+      <pre style="background:#f3f4f6;padding:12px;border-radius:8px;">{code}</pre>
+      <p><strong>Code period:</strong> {period_key}</p>
+      <p>Use the access link or enter your subscriber email and backup code one time. After it unlocks, bookmark the unlocked page.</p>
+      <p><strong>Do not share your access link or code.</strong></p>
+      <p style="font-size:13px;color:#4b5563;">Educational only. Not financial advice. Options involve substantial risk, including possible loss of 100% of premium.</p>
+    </div>
+    """
+    return subject, text, html
+
+
+def send_email_with_resend(to_email: str, subject: str, html: str, text: str) -> tuple[bool, str]:
+    api_key = str(secret_value("RESEND_API_KEY", "")).strip()
+    if not api_key:
+        return False, "RESEND_API_KEY is not configured."
+
+    from_email = str(
+        secret_value("MEMBER_EMAIL_FROM", "Dylan Dave Options Desk <onboarding@resend.dev>")
+    ).strip()
+    reply_to = str(secret_value("SUPPORT_EMAIL", "")).strip()
+    payload: dict[str, object] = {
+        "from": from_email,
+        "to": [to_email],
+        "subject": subject,
+        "html": html,
+        "text": text,
+    }
+    if reply_to:
+        payload["reply_to"] = [reply_to]
+
+    try:
+        response = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=15,
+        )
+    except Exception as exc:
+        return False, f"Resend email request failed: {exc}"
+
+    if 200 <= response.status_code < 300:
+        return True, "Member access email sent."
+    return False, f"Resend rejected email: {response.status_code} {response.text[:300]}"
+
+
+def send_email_with_smtp(to_email: str, subject: str, html: str, text: str) -> tuple[bool, str]:
+    host = str(secret_value("SMTP_HOST", "")).strip()
+    username = str(secret_value("SMTP_USERNAME", "")).strip()
+    password = str(secret_value("SMTP_PASSWORD", "")).strip()
+    from_email = str(secret_value("MEMBER_EMAIL_FROM", username)).strip()
+    if not (host and username and password and from_email):
+        return False, "SMTP email settings are not complete."
+
+    try:
+        port = int(secret_value("SMTP_PORT", 587))
+    except (TypeError, ValueError):
+        port = 587
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = from_email
+    message["To"] = to_email
+    reply_to = str(secret_value("SUPPORT_EMAIL", "")).strip()
+    if reply_to:
+        message["Reply-To"] = reply_to
+    message.set_content(text)
+    message.add_alternative(html, subtype="html")
+
+    try:
+        context = ssl.create_default_context()
+        with smtplib.SMTP(host, port, timeout=20) as server:
+            server.starttls(context=context)
+            server.login(username, password)
+            server.send_message(message)
+    except Exception as exc:
+        return False, f"SMTP email failed: {exc}"
+
+    return True, "Member access email sent."
+
+
+def send_member_access_email(email: str, code: str, period_key: str, member_pass: str) -> tuple[bool, str]:
+    if not member_email_sending_enabled():
+        return False, "Member email sending is not configured."
+
+    access_url = member_pass_access_url(member_pass) if member_pass else app_public_url()
+    subject, text, html = build_member_access_email(email, code, period_key, access_url)
+    if str(secret_value("RESEND_API_KEY", "")).strip():
+        return send_email_with_resend(email, subject, html, text)
+    return send_email_with_smtp(email, subject, html, text)
+
+
+def maybe_send_member_access_email(email: str, code: str, period_key: str, member_pass: str) -> None:
+    if not (email and code and period_key and member_pass):
+        return
+    email_key = f"{email.strip().lower()}:{period_key}"
+    if st.session_state.get("member_access_email_sent_key") == email_key:
+        return
+    sent, message = send_member_access_email(email.strip().lower(), code, period_key, member_pass)
+    if sent:
+        st.session_state["member_access_email_sent_key"] = email_key
+    st.session_state["member_access_email_status"] = message
+
+
 def clear_payment_query_params() -> None:
     try:
         for name in ("session_id", "checkout_session_id", "stripe_session_id"):
@@ -473,6 +632,9 @@ def require_subscription_if_enabled() -> None:
                 f"This browser has a saved member pass until {pass_expires}. "
                 "Bookmark this page for one-click access, but do not share this saved-pass URL."
             )
+        email_status = st.session_state.get("member_access_email_status")
+        if email_status and member_email_sending_enabled():
+            st.sidebar.caption(str(email_status))
         return
 
     price_label = str(secret_value("SUBSCRIPTION_PRICE_LABEL", "$24.99/month")).strip() or "$24.99/month"
