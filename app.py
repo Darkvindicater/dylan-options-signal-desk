@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -17,6 +18,7 @@ from engine import SignalEngine
 ROOT = Path(__file__).parent
 APP_STATE_VERSION = 21
 USER_AGREEMENT_VERSION = "2026-07-14-v2"
+MEMBER_PASS_QUERY_PARAM = "member_pass"
 CANDIDATE_SCHEMA_FIELDS = (
     "setup_status", "checklist", "darvas", "company", "catalyst",
     "setup_type", "a_plus_score", "reversal_watch", "extended_watch",
@@ -135,6 +137,110 @@ def rotating_access_code_is_valid(email: str, submitted_code: str) -> bool:
         if hmac.compare_digest(submitted, expected):
             return True
     return False
+
+
+def member_pass_days() -> int:
+    try:
+        days = int(secret_value("MEMBER_PASS_DAYS", 35))
+    except (TypeError, ValueError):
+        days = 35
+    return max(1, min(days, 370))
+
+
+def member_pass_secret() -> str:
+    return str(secret_value("MEMBER_PASS_SECRET", "") or secret_value("ROTATING_ACCESS_SECRET", "")).strip()
+
+
+def b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def b64url_decode(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode(f"{value}{padding}".encode("ascii"))
+
+
+def sign_member_payload(payload_b64: str, secret: str) -> str:
+    return hmac.new(secret.encode("utf-8"), payload_b64.encode("ascii"), hashlib.sha256).hexdigest()
+
+
+def create_member_pass_token(email: str) -> tuple[str, str]:
+    secret = member_pass_secret()
+    if not secret or not email.strip():
+        return "", ""
+
+    expires_at = datetime.now().astimezone() + timedelta(days=member_pass_days())
+    payload = {
+        "v": 1,
+        "kind": "dd_member_pass",
+        "email": email.strip().lower(),
+        "expires": int(expires_at.timestamp()),
+    }
+    payload_json = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    payload_b64 = b64url_encode(payload_json)
+    signature = sign_member_payload(payload_b64, secret)
+    return f"DDPASS.{payload_b64}.{signature}", expires_at.strftime("%Y-%m-%d")
+
+
+def verify_member_pass_token(token: str) -> tuple[bool, str, str, str]:
+    """Return (ok, email, expires_date, message) for a signed member pass."""
+    secret = member_pass_secret()
+    if not secret:
+        return False, "", "", "Member pass is not configured yet."
+
+    parts = token.strip().split(".")
+    if len(parts) != 3 or parts[0] != "DDPASS":
+        return False, "", "", "Member pass format is not recognized."
+
+    payload_b64, submitted_signature = parts[1], parts[2]
+    expected_signature = sign_member_payload(payload_b64, secret)
+    if not hmac.compare_digest(submitted_signature, expected_signature):
+        return False, "", "", "Member pass signature is invalid."
+
+    try:
+        payload = json.loads(b64url_decode(payload_b64).decode("utf-8"))
+    except Exception:
+        return False, "", "", "Member pass payload is invalid."
+
+    if payload.get("kind") != "dd_member_pass":
+        return False, "", "", "Member pass type is invalid."
+
+    email = str(payload.get("email", "")).strip().lower()
+    try:
+        expires = int(payload.get("expires", 0))
+    except (TypeError, ValueError):
+        expires = 0
+
+    if not email or not expires:
+        return False, "", "", "Member pass is missing subscriber details."
+
+    now = int(datetime.now().astimezone().timestamp())
+    if expires < now:
+        return False, email, datetime.fromtimestamp(expires).strftime("%Y-%m-%d"), "Member pass expired."
+
+    expires_date = datetime.fromtimestamp(expires).strftime("%Y-%m-%d")
+    return True, email, expires_date, "Member pass accepted."
+
+
+def grant_member_access(email: str, source_message: str = "Member access active.") -> None:
+    email = email.strip().lower()
+    st.session_state["subscriber_access_granted"] = True
+    st.session_state["subscriber_email"] = email
+    st.session_state["stripe_unlock_message"] = source_message
+
+    member_code, period_key = current_member_code_for_email(email)
+    if member_code:
+        st.session_state["subscriber_current_code"] = member_code
+        st.session_state["subscriber_current_period"] = period_key
+
+    member_pass, expires_date = create_member_pass_token(email)
+    if member_pass:
+        st.session_state["subscriber_member_pass"] = member_pass
+        st.session_state["subscriber_member_pass_expires"] = expires_date
+        try:
+            st.query_params[MEMBER_PASS_QUERY_PARAM] = member_pass
+        except Exception:
+            pass
 
 
 def first_query_value(*names: str) -> str:
@@ -330,17 +436,23 @@ def require_subscription_if_enabled() -> None:
     if not subscription_enabled:
         return
 
+    member_pass = first_query_value(MEMBER_PASS_QUERY_PARAM, "member_token", "access_token")
+    if member_pass and not st.session_state.get("subscriber_access_granted"):
+        pass_ok, email, expires_date, message = verify_member_pass_token(member_pass)
+        if pass_ok:
+            st.session_state["subscriber_access_granted"] = True
+            st.session_state["subscriber_email"] = email
+            st.session_state["subscriber_member_pass"] = member_pass
+            st.session_state["subscriber_member_pass_expires"] = expires_date
+            st.session_state["stripe_unlock_message"] = "Saved member pass accepted. No code needed."
+        else:
+            st.warning(f"{message} Please subscribe or unlock once with your current member code.")
+
     checkout_session_id = first_query_value("session_id", "checkout_session_id", "stripe_session_id")
     if checkout_session_id and not st.session_state.get("subscriber_access_granted"):
         verified, email, message = verify_stripe_checkout_session(checkout_session_id)
         if verified:
-            st.session_state["subscriber_access_granted"] = True
-            st.session_state["subscriber_email"] = email
-            st.session_state["stripe_unlock_message"] = message
-            member_code, period_key = current_member_code_for_email(email)
-            if member_code:
-                st.session_state["subscriber_current_code"] = member_code
-                st.session_state["subscriber_current_period"] = period_key
+            grant_member_access(email, message)
             clear_payment_query_params()
             st.rerun()
         else:
@@ -355,6 +467,12 @@ def require_subscription_if_enabled() -> None:
         if member_code:
             st.sidebar.caption(f"Save this member code for {member_period}:")
             st.sidebar.code(str(member_code), language="text")
+        pass_expires = st.session_state.get("subscriber_member_pass_expires")
+        if pass_expires:
+            st.sidebar.caption(
+                f"This browser has a saved member pass until {pass_expires}. "
+                "Bookmark this page for one-click access, but do not share this saved-pass URL."
+            )
         return
 
     price_label = str(secret_value("SUBSCRIPTION_PRICE_LABEL", "$24.99/month")).strip() or "$24.99/month"
@@ -368,7 +486,8 @@ def require_subscription_if_enabled() -> None:
     )
     st.info(
         "Unpaid visitors see this membership page first. After payment, Stripe can send them "
-        "back here and unlock the scanner automatically. The private code box stays here as a backup."
+        "back here and unlock the scanner automatically. If a code is needed, enter it once and "
+        "the app saves a signed member pass for this browser."
     )
 
     if stripe_payment_link:
@@ -387,7 +506,8 @@ def require_subscription_if_enabled() -> None:
 
     st.caption(
         "Stripe promo codes are discount codes created in Stripe. The member access code below "
-        "is only a backup app-unlock code after payment."
+        "is only a backup app-unlock code after payment. After one successful unlock, this browser "
+        "will keep a signed member pass so the subscriber does not need to enter the code every time."
     )
 
     with st.form("member_access_form"):
@@ -399,8 +519,10 @@ def require_subscription_if_enabled() -> None:
         static_code_ok = valid_access_codes and normalize_access_code(code) in valid_access_codes
         rotating_code_ok = rotating_access_code_is_valid(email, code)
         if static_code_ok or rotating_code_ok:
-            st.session_state["subscriber_access_granted"] = True
-            st.session_state["subscriber_email"] = email.strip()
+            if not email.strip():
+                st.error("Enter the subscriber email too, so the app can save a one-time member pass.")
+                st.stop()
+            grant_member_access(email, "Member code accepted. This browser now has a saved member pass.")
             st.rerun()
         else:
             st.error("Access code not recognized. Check the code Dylan sent after payment.")
@@ -410,8 +532,9 @@ def require_subscription_if_enabled() -> None:
 
     st.caption(
         "Simple membership mode uses Stripe Payment Links plus private Streamlit secrets. "
-        "Sharing the app link will not share an unlocked session. Rotating codes can be tied to a subscriber email "
-        "and refresh each billing period. "
+        "Sharing the plain app link will not unlock someone else. Rotating codes can be tied to a subscriber email "
+        "and refresh each billing period. A signed member pass keeps the same browser unlocked after one successful code; "
+        "saved-pass URLs should not be shared. "
         "For fully automated subscriptions, add Stripe Checkout webhooks and a subscriber database."
     )
     st.stop()

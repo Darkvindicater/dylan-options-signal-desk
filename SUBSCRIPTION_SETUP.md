@@ -10,7 +10,8 @@ The app now supports a simple paid-membership gate.
 - A Stripe payment button when you add a Stripe Payment Link.
 - Automatic Stripe return unlock after a paid checkout.
 - A private member access-code check using Streamlit secrets as a backup.
-- Share-safe link behavior: if someone shares the app URL, the new visitor still sees the agreement and paywall first.
+- A signed member pass after one successful unlock so customers do not type the code every time.
+- Share-safe plain-link behavior: if someone shares the plain app URL, the new visitor still sees the agreement and paywall first.
 
 ## Turn on $24.99/month payments
 
@@ -33,6 +34,7 @@ ROTATING_ACCESS_PERIOD = "monthly"
 ROTATING_ACCESS_GRACE_PERIODS = "0"
 STRIPE_SECRET_KEY = "sk_live_your_private_stripe_secret_key"
 STRIPE_PREFILLED_PROMO_CODE = ""
+MEMBER_PASS_DAYS = "35"
 SUPPORT_EMAIL = "your_support_email@example.com"
 ```
 
@@ -57,7 +59,7 @@ https://dylan-dave-options-desk.streamlit.app/?session_id={CHECKOUT_SESSION_ID}
 STRIPE_SECRET_KEY = "sk_live_your_private_stripe_secret_key"
 ```
 
-When a customer pays, Stripe sends them back to the app with their Checkout Session ID. The app verifies that session with Stripe, unlocks their browser, and shows them their current monthly member code so they can save it.
+When a customer pays, Stripe sends them back to the app with their Checkout Session ID. The app verifies that session with Stripe, unlocks their browser, creates a signed member pass, and shows them their current monthly member code as a backup.
 
 Never commit or share `STRIPE_SECRET_KEY`.
 
@@ -90,13 +92,14 @@ If a promo code does not work at checkout, check Stripe first:
 
 ## Backup access codes
 
-The rotating-code version is still available as a backup. The code refreshes automatically by billing period:
+The rotating-code version is still available as a backup. The customer only needs to use it once on their browser. After the first successful unlock, the app creates a signed member pass and puts it in the page URL so refreshing/reopening that page does not require the code again.
 
 1. Customer pays through Stripe.
 2. The app should unlock automatically after Stripe redirects them back.
 3. If automatic unlock fails, you can generate their monthly code using their subscriber email.
-4. Send them that email-specific monthly code.
-5. Next month, the old monthly code stops working and the app generates a new one after successful payment return.
+4. Send them that email-specific monthly code one time.
+5. They enter their email and code once.
+6. The app saves a signed member pass for that browser for `MEMBER_PASS_DAYS`.
 
 Generate a code locally:
 
@@ -110,15 +113,18 @@ Generate next month's code:
 .venv\Scripts\python.exe generate_member_code.py customer@email.com --ahead 1
 ```
 
-Sharing the app link does **not** unlock the app for someone else because Streamlit session state is per visitor/session. However, a subscriber can still share their email/code pair. To reduce that risk:
+Sharing the plain app link does **not** unlock the app for someone else because Streamlit session state is per visitor/session. However, a subscriber can still share their email/code pair or their saved member-pass URL. To reduce that risk:
 
 - Codes are tied to subscriber email.
 - Codes rotate every month by default.
+- After one good unlock, the subscriber gets a signed member pass so they do not keep typing the code.
+- The signed member pass expires after `MEMBER_PASS_DAYS`, which defaults to 35 days.
+- Tell subscribers to bookmark their saved-pass URL but not share it.
 - Use `ROTATING_ACCESS_PERIOD = "daily"` only if you want daily codes, which is more work.
 - Keep `ROTATING_ACCESS_SECRET` private and never commit it to GitHub.
 - Tell subscribers not to share codes in the membership terms.
 
-This setup removes the normal manual code-sending step. For a bigger business, upgrade later to Stripe webhooks + a subscriber database so access can stay synced automatically when a card fails, a subscription is canceled, or a refund happens.
+This setup removes repeated code entry for the same browser. For a bigger business, upgrade later to Stripe webhooks + a subscriber database so access can stay synced automatically when a card fails, a subscription is canceled, or a refund happens.
 
 ## Legal note
 
